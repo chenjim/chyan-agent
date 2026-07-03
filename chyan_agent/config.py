@@ -1,5 +1,6 @@
-import json
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -51,9 +52,9 @@ class Config:
     logging: LoggingConfig
 
     @classmethod
-    def load(cls, path: str = "config.json") -> "Config":
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+    def load(cls, path: str = "config.toml") -> "Config":
+        raw = Path(path).read_text(encoding="utf-8")
+        data = tomllib.loads(raw)
 
         llm = LLMConfig(**data.get("llm", {}))
         context = ContextConfig(**data.get("context", {}))

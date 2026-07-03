@@ -56,9 +56,10 @@ class TestToolExecutor:
         assert path.read_text() == "line1\nline2\n"
 
     def test_write_sensitive_file_blocked(self):
-        result = self.te.execute("write", path="config.json", content="hack")
-        assert not result["success"]
-        assert "禁止" in result["error"]
+        for name in ("config.toml", ".env"):
+            result = self.te.execute("write", path=name, content="hack")
+            assert not result["success"], f"expected {name} to be blocked"
+            assert "禁止" in result["error"]
 
     def test_search(self):
         (Path(self.tmpdir) / "a.py").write_text("")

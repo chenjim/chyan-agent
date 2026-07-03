@@ -48,7 +48,7 @@ def setup_logging(config):
 
 def main():
     parser = argparse.ArgumentParser(description="chyan-agent - 10K 上下文轻量 Agent")
-    parser.add_argument("--config", default="config.json", help="配置文件路径")
+    parser.add_argument("--config", default="config.toml", help="配置文件路径")
     parser.add_argument("--resume-from-turn", type=int, default=None, help="从指定轮次恢复")
     parser.add_argument("--rebuild-context", action="store_true", help="强制从 conversation.jsonl 重建上下文")
     args = parser.parse_args()

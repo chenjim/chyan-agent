@@ -32,14 +32,14 @@ chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**
 ~/Project/chyan-agent/
 ├── chyan_agent/
 │   ├── __init__.py
-│   ├── config.py          # 加载并校验 config.json
+│   ├── config.py          # 加载并校验 config.toml
 │   ├── context.py         # 上下文预算管理：token 计数、摘要、裁剪
 │   ├── memory.py          # JSON 持久化：原始历史 + 长期记忆
 │   ├── tools.py           # 工具定义与执行
 │   ├── llm.py             # 统一 LLM 调用封装
 │   └── agent.py           # 主编排逻辑
-├── config.json            # 用户配置文件（需手动创建或复制模板）
-├── config.example.json    # 配置模板
+├── config.toml            # 用户配置文件（需手动创建或复制模板）
+├── config.example.toml    # 配置模板
 ├── main.py                # 命令行交互入口
 ├── scripts/
 │   └── run_100_turns.py   # 100 轮自动对话测试
@@ -51,45 +51,13 @@ chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**
 
 ---
 
-## 4. 配置系统（config.json）
+## 4. 配置系统（config.toml）
 
-`chyan_agent/config.py` 负责读取 `config.json`，并提供类型安全的访问接口。
+`chyan_agent/config.py` 负责读取 `config.toml`，并提供类型安全的访问接口。
 
 ### 4.1 配置项
 
-```json
-{
-  "llm": {
-    "base_url": "https://api.openai.com/v1",
-    "api_key": "sk-...",
-    "model": "gpt-4o-mini",
-    "temperature": 0.3,
-    "max_tokens": 1024
-  },
-  "context": {
-    "context_limit": 10000,
-    "reserved_tokens": 3500,
-    "max_recent_turns": 2,
-    "summary_ratio": 0.3
-  },
-  "memory": {
-    "data_dir": "./data",
-    "recall_mode": "bm25",
-    "recall_top_k": 5
-  },
-  "system_prompt": "你是一个运行在 10K 上下文窗口下的轻量 Agent。\n\n核心规则：\n1. 当需要记住长期事实时，使用 remember 工具。\n2. 当需要回忆过往信息时，使用 recall 工具。\n3. 文件操作前先用 search 确认路径。\n4. 回复简洁，避免冗余。\n\n当前上下文预算有限，请优先使用工具而非依赖对话历史。",
-  "tools": {
-    "read_max_lines": 500,
-    "read_truncate_mode": "auto"
-  },
-  "logging": {
-    "level": "INFO",
-    "log_file": "./data/agent.log",
-    "max_bytes": 10485760,
-    "backup_count": 3
-  }
-}
-```
+完整配置参见 [`config.toml`](../config.toml)。
 
 ### 4.2 关键参数说明
 
@@ -232,65 +200,7 @@ data/
 - 每次调用 `remember` 工具新增记忆时，重建索引（记忆数量通常较少，重建开销可接受）。
 - `recall` 工具使用 BM25 算法对查询进行相关性排序，返回 top_k 条最匹配的记忆。
 
-**实现示例（memory.py 核心代码）**：
-```python
-from rank_bm25 import BM25Okapi
-import json
-
-class MemoryManager:
-    def __init__(self, data_dir: str):
-        self.data_dir = data_dir
-        self.memories = self._load_memories()
-        self.bm25_index = None
-        self._rebuild_bm25_index()
-    
-    def _rebuild_bm25_index(self):
-        if not self.memories:
-            self.bm25_index = None
-            return
-        
-        # 简单分词（中文可用 jieba，英文空格分割）
-        docs = [m["content"] for m in self.memories]
-        tokenized_docs = [doc.split() for doc in docs]
-        self.bm25_index = BM25Okapi(tokenized_docs)
-    
-    def recall(self, query: str, top_k: int = 5) -> list[dict]:
-        if not self.bm25_index:
-            return []
-        
-        # BM25 打分
-        scores = self.bm25_index.get_scores(query.split())
-        
-        # 获取 top-k 索引
-        top_indices = sorted(
-            range(len(scores)), 
-            key=lambda i: scores[i], 
-            reverse=True
-        )[:top_k]
-        
-        # 返回匹配的记忆（附带相关性分数）
-        results = []
-        for idx in top_indices:
-            if scores[idx] > 0:  # 只返回有相关性的结果
-                results.append({
-                    **self.memories[idx],
-                    "relevance_score": round(scores[idx], 3)
-                })
-        return results
-    
-    def remember(self, content: str, source_turn: int) -> str:
-        memory_id = f"m{len(self.memories) + 1}"
-        new_memory = {
-            "id": memory_id,
-            "content": content,
-            "source_turn": source_turn,
-            "created_at": datetime.now().isoformat()
-        }
-        self.memories.append(new_memory)
-        self._save_memories()
-        self._rebuild_bm25_index()  # 重建索引
-        return memory_id
-```
+实现参见 [`chyan_agent/memory.py`](../chyan_agent/memory.py)。
 
 ---
 
@@ -311,7 +221,7 @@ class MemoryManager:
 
 为防止单个文件占满上下文预算，`read` 工具实现智能截断：
 
-**配置参数**（来自 config.json）：
+**配置参数**（来自 config.toml）：
 - `read_max_lines`：最多返回行数（默认 500）
 - `read_truncate_mode`：截断模式（默认 "auto"）
 
@@ -392,7 +302,7 @@ def read_file(path: str, max_lines: int, mode: str) -> str:
 
 ### 7.4 安全边界
 
-- `write` 默认禁止覆盖 `config.json`、`.env` 等敏感文件（白名单机制）。
+- `write` 默认禁止覆盖 `config.toml`、`config.json`、`.env` 等敏感文件（白名单机制）。
 - 所有文件操作限制在当前工作目录及其子目录。
 - 工具执行失败时返回结构化错误信息，包含建议的修复步骤，不抛异常中断对话。
 
@@ -437,52 +347,7 @@ class LLMClient:
 | 无可用 key | 401 | 不重试，提示配置 | - |
 | 返回格式异常 | JSON 解析失败 | 不重试，记录日志 | - |
 
-**实现示例**：
-```python
-import time
-from openai import OpenAI, APIError, Timeout, RateLimitError
-
-class LLMClient:
-    def chat(self, messages: list, tools: list | None = None) -> LLMResponse:
-        for attempt in range(3):
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.config.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                    timeout=30
-                )
-                return self._parse_response(response)
-            
-            except Timeout as e:
-                if attempt < 2:
-                    wait = 2 ** attempt  # 1s, 2s
-                    logger.warning(f"API 超时，{wait}s 后重试 ({attempt+1}/2)")
-                    time.sleep(wait)
-                else:
-                    logger.error("API 超时，已达重试上限")
-                    raise
-            
-            except RateLimitError as e:
-                if attempt < 3:
-                    wait = 2 ** attempt  # 1s, 2s, 4s
-                    logger.warning(f"速率限制，{wait}s 后重试 ({attempt+1}/3)")
-                    time.sleep(wait)
-                else:
-                    logger.error("速率限制，已达重试上限")
-                    raise
-            
-            except APIError as e:
-                if e.status_code in [500, 502, 503, 504] and attempt < 2:
-                    wait = 2 ** attempt
-                    logger.warning(f"服务端错误 {e.status_code}，{wait}s 后重试")
-                    time.sleep(wait)
-                else:
-                    logger.error(f"API 错误 {e.status_code}: {e.message}")
-                    raise
-```
+实现参见 [`chyan_agent/llm.py`](../chyan_agent/llm.py)。
 
 ### 8.4 日志系统
 
@@ -497,39 +362,7 @@ class LLMClient:
 | WARNING | 接近预算、召回结果为空、文件不存在 | `[WARNING] 上下文占用 90%: 12500/13500 tokens` |
 | ERROR | API 失败、文件操作异常、配置错误 | `[ERROR] API 调用失败: 429 Rate Limit` |
 
-**初始化代码**：
-```python
-import logging
-from logging.handlers import RotatingFileHandler
-
-def setup_logger(config):
-    logger = logging.getLogger("chyan-agent")
-    logger.setLevel(getattr(logging, config.logging.level))
-    
-    # 文件处理器（自动轮转）
-    handler = RotatingFileHandler(
-        config.logging.log_file,
-        maxBytes=config.logging.max_bytes,
-        backupCount=config.logging.backup_count,
-        encoding='utf-8'
-    )
-    
-    # 格式化
-    formatter = logging.Formatter(
-        '[%(asctime)s] [%(levelname)s] %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    
-    # 同时输出到控制台（可选）
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    console.setFormatter(formatter)
-    logger.addHandler(console)
-    
-    return logger
-```
+初始化代码参见 [`main.py`](../main.py)。
 
 **日志输出示例**：
 ```
@@ -548,38 +381,7 @@ def setup_logger(config):
 
 ### 9.1 主循环
 
-```python
-class Agent:
-    MAX_TOOL_ITERATIONS = 5  # 防止工具调用死循环
-    
-    def run_turn(self, user_input: str) -> str:
-        # 1. 构建上下文
-        messages = self.context.build_messages(user_input)
-
-        # 2. 第一次 LLM 调用（允许工具）
-        response = self.llm.chat(messages, tools=TOOLS)
-
-        # 3. 工具调用循环，带终止条件
-        for iteration in range(self.MAX_TOOL_ITERATIONS):
-            if not response.has_tool_calls():
-                break
-            
-            # 执行工具并添加结果到消息列表
-            tool_messages = self._execute_tool_calls(response.tool_calls)
-            messages.extend(tool_messages)
-            
-            # 再次调用 LLM
-            response = self.llm.chat(messages, tools=TOOLS)
-        else:
-            # 超过最大迭代次数
-            return "工具调用次数超过限制，请简化你的请求或分步操作"
-
-        # 4. 保存轮次
-        self.memory.save_turn(user_input, response.content, response.tool_calls)
-
-        # 5. 返回回复
-        return response.content
-```
+实现参见 [`chyan_agent/agent.py`](../chyan_agent/agent.py)。
 
 ### 9.2 与上下文管理的协作
 
@@ -593,7 +395,7 @@ class Agent:
 ### 10.1 交互模式
 
 ```bash
-python main.py --config config.json
+python main.py --config config.toml
 ```
 
 交互界面：
@@ -624,10 +426,10 @@ chyan-agent > 帮我看看 src/main.py 的内容
 **手动恢复**：
 ```bash
 # 从指定轮次继续（跳过前 N 轮）
-python main.py --config config.json --resume-from-turn 50
+python main.py --config config.toml --resume-from-turn 50
 
 # 强制重建 meta.json（忽略现有快照）
-python main.py --config config.json --rebuild-context
+python main.py --config config.toml --rebuild-context
 ```
 
 **恢复日志示例**：
@@ -741,58 +543,7 @@ output/
 └── test_scenarios.json  # 测试用例定义
 ```
 
-**test_scenarios.json 格式**：
-```json
-{
-  "scenarios": [
-    {
-      "type": "linear",
-      "description": "独立问题，测试基本上下文管理",
-      "turns": 30,
-      "prompts": [
-        "介绍一下 Python 语言的特点",
-        "什么是 Docker 容器技术",
-        "解释 REST API 的设计原则",
-        "说说微服务架构的优缺点",
-        "...（共 30 条）"
-      ]
-    },
-    {
-      "type": "dependency",
-      "description": "每条输入依赖前几轮结果，测试 recent 保留和 summary 压缩",
-      "turns": 40,
-      "prompts": [
-        "创建一个名为 test.txt 的文件",
-        "往 test.txt 里写入 'Hello World'",
-        "读取 test.txt 的内容",
-        "在 test.txt 末尾追加一行 'Goodbye'",
-        "再读一次 test.txt，确认内容",
-        "...（共 40 条，形成操作链）"
-      ]
-    },
-    {
-      "type": "memory_recall",
-      "description": "频繁调用 remember/recall，测试长期记忆索引效果",
-      "turns": 30,
-      "prompts": [
-        "记住：我最喜欢的编程语言是 Python",
-        "记住：项目数据库使用 PostgreSQL 15",
-        "记住：API 服务运行在 8080 端口",
-        "介绍一下 Rust 语言",
-        "...（10 轮无关对话）",
-        "我最喜欢的编程语言是什么？",
-        "项目用的什么数据库？",
-        "...（共 30 条，穿插记忆存取）"
-      ]
-    }
-  ],
-  "metadata": {
-    "total_turns": 100,
-    "created_at": "2026-07-03T10:00:00",
-    "description": "100 轮压力测试场景定义"
-  }
-}
-```
+测试场景定义参见 [`scripts/run_100_turns.py`](../scripts/run_100_turns.py)。
 
 **输出 JSONL 格式**（每行一个 JSON 对象）：
 ```jsonl
@@ -811,46 +562,7 @@ output/
 
 **context_usage.png 图表内容**：
 
-使用 matplotlib 生成双子图，展示上下文占用趋势：
-
-```python
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# 读取日志
-df = pd.read_json("output/turns_log.jsonl", lines=True)
-
-# 创建双子图
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-
-# 图1：token 占用堆叠面积图
-ax1.fill_between(df['turn'], 0, df['system_tokens'], label='System', alpha=0.7)
-ax1.fill_between(df['turn'], df['system_tokens'], 
-                 df['system_tokens'] + df['summary_tokens'], 
-                 label='Summary', alpha=0.7)
-ax1.fill_between(df['turn'], df['system_tokens'] + df['summary_tokens'], 
-                 df['total_tokens'], label='Recent', alpha=0.7)
-ax1.axhline(y=6500, color='r', linestyle='--', label='Usable Limit')
-ax1.axhline(y=10000, color='k', linestyle='--', label='Context Limit')
-ax1.set_xlabel('Turn')
-ax1.set_ylabel('Tokens')
-ax1.set_title('上下文占用趋势（堆叠）')
-ax1.legend()
-ax1.grid(alpha=0.3)
-
-# 图2：压缩事件时间线
-compression_turns = df[df['compression_triggered'] == True]['turn']
-ax2.scatter(compression_turns, [1]*len(compression_turns), 
-            color='red', s=100, alpha=0.6, label='Compression')
-ax2.set_xlabel('Turn')
-ax2.set_yticks([])
-ax2.set_title('压缩触发时间线')
-ax2.legend()
-ax2.grid(axis='x', alpha=0.3)
-
-plt.tight_layout()
-plt.savefig('output/context_usage.png', dpi=150)
-```
+使用 matplotlib 生成双子图，展示上下文占用趋势，代码详见 [`scripts/run_100_turns.py`](../scripts/run_100_turns.py)。
 
 **预期图表**：
 - 图1 显示：
@@ -928,27 +640,27 @@ pip install -r requirements.txt
 
 ### 14.2 分阶段验证
 
-**阶段 1：核心模块验证（3-5 天）**
+**阶段 1：核心模块验证**
 1. 实现 `context.py`，用 20 条固定消息测试压缩逻辑。
 2. 实现 `memory.py`，测试 BM25 召回 10 条记忆的准确率。
 3. 验证 token 计数准确性（与 OpenAI API 对比误差 < 5%）。
 
-**阶段 2：小规模集成（2-3 天）**
-4. 实现 `agent.py` + `tools.py`，跑通 20 轮完整对话。
-5. 观察上下文增长曲线，调整 `reserved_tokens` 和 `max_recent_turns`。
-6. 测试工具调用链路（read → grep → write 连续操作）。
+**阶段 2：小规模集成**
+1. 实现 `agent.py` + `tools.py`，跑通 20 轮完整对话。
+2. 观察上下文增长曲线，调整 `reserved_tokens` 和 `max_recent_turns`。
+3. 测试工具调用链路（read → grep → write 连续操作）。
 
-**阶段 3：100 轮压力测试（2-3 天）**
-7. 实现 `scripts/run_100_turns.py`，执行三种场景。
-8. 生成上下文占用曲线图，确认始终低于 10K。
-9. 人工抽查 10 轮对话，验证回复质量和记忆召回准确性。
+**阶段 3：100 轮压力测试**
+1. 实现 `scripts/run_100_turns.py`，执行三种场景。
+2. 生成上下文占用曲线图，确认始终低于 10K。
+3. 人工抽查 10 轮对话，验证回复质量和记忆召回准确性。
 
 ---
 
 ## 15. 下一步工作
 
 1. 创建 `chyan_agent/` 包结构与各模块代码。
-2. 创建 `config.example.json`。
+2. 创建 `config.example.toml`。
 3. 实现 `main.py` CLI。
 4. 实现 `scripts/run_100_turns.py`。
 5. 按 14.2 节分阶段验证。

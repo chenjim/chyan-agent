@@ -5,7 +5,7 @@ from pathlib import Path
 
 logger = logging.getLogger("chyan-agent")
 
-SENSITIVE_FILES = {"config.json", ".env", ".env.local", "config.example.json"}
+SENSITIVE_FILES = {"config.toml", "config.example.toml", ".env", ".env.local"}
 
 
 class ToolExecutor:
@@ -35,7 +35,7 @@ class ToolExecutor:
             },
             {
                 "name": "write",
-                "description": "写入或追加内容到文件。禁止覆盖 config.json、.env 等敏感文件。",
+                "description": "写入或追加内容到文件。禁止覆盖 config.toml、.env 等敏感文件。",
                 "parameters": {
                     "type": "object",
                     "properties": {

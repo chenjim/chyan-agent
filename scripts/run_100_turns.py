@@ -194,7 +194,7 @@ def run_turn_safe(agent: Agent, prompt: str):
 
 def main():
     setup_logging()
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.json"
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.toml"
 
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)

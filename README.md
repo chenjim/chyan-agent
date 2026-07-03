@@ -25,13 +25,13 @@ chyan-agent **不是**一个通用 Agent 框架，而是一个**工程演示项�
 chyan-agent/
 ├── chyan_agent/
 │   ├── __init__.py
-│   ├── config.py         # 加载并校验 config.json
+│   ├── config.py         # 加载并校验 config.toml
 │   ├── context.py        # 上下文预算管理：token 计数、摘要、裁剪
 │   ├── memory.py         # JSON 持久化：原始历史 + 长期记忆
 │   ├── tools.py          # 工具定义与执行
 │   ├── llm.py            # 统一 LLM 调用封装
 │   └── agent.py          # 主编排逻辑
-├── config.json           # 用户配置文件
+├── config.toml           # 用户配置文件
 ├── main.py               # 命令行交互入口
 ├── scripts/
 │   └── run_100_turns.py  # 100 轮自动对话测试
@@ -53,18 +53,15 @@ pip install -r requirements.txt
 
 ### 2. 配置
 
-编辑 `config.json`，填入你的 LLM API 信息：
+编辑 `config.toml`，填入你的 LLM API 信息：
 
-```json
-{
-  "llm": {
-    "base_url": "https://api.openai.com/v1",
-    "api_key": "sk-xxx",
-    "model": "gpt-4o-mini",
-    "temperature": 0.3,
-    "max_tokens": 1024
-  }
-}
+```toml
+[llm]
+base_url = "https://api.openai.com/v1"
+api_key = "sk-xxx"
+model = "gpt-4o-mini"
+temperature = 0.3
+max_tokens = 1024
 ```
 
 详见 `docs/design.md` 完整配置说明。
@@ -118,6 +115,12 @@ usable_for_history = context_limit - fixed_cost - reserved_tokens
 | `recall` | 从长期记忆中召回归档信息 |
 
 ## 测试
+
+运行单元测试：
+
+```bash
+.venv/bin/python -m pytest tests/ -v --tb=short
+```
 
 运行 100 轮压力测试：
 

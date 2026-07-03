@@ -1,8 +1,31 @@
-import json
 import tempfile
 from pathlib import Path
 
 from chyan_agent.config import Config
+
+
+def _write_toml(path, data):
+    sections = []
+    top_keys = []
+    for k, v in data.items():
+        if isinstance(v, dict):
+            sections.append((k, v))
+        else:
+            top_keys.append((k, v))
+    lines = [f'{k} = {_toml_val(v)}' for k, v in top_keys]
+    for name, kv in sections:
+        lines.append(f"\n[{name}]")
+        for k, v in kv.items():
+            lines.append(f'{k} = {_toml_val(v)}')
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _toml_val(v):
+    if isinstance(v, str):
+        return f'"{v}"'
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
 
 
 class TestConfig:
@@ -11,12 +34,12 @@ class TestConfig:
             "llm": {"base_url": "https://test.com/v1", "api_key": "sk-test"},
             "system_prompt": "You are a test agent.",
         }
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(data, f)
-            path = f.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
+            path = Path(f.name)
+        _write_toml(path, data)
 
         try:
-            cfg = Config.load(path)
+            cfg = Config.load(str(path))
             assert cfg.llm.base_url == "https://test.com/v1"
             assert cfg.llm.api_key == "sk-test"
             assert cfg.llm.model == "gpt-4o-mini"
@@ -26,7 +49,7 @@ class TestConfig:
             assert cfg.tools.read_max_lines == 500
             assert cfg.logging.level == "INFO"
         finally:
-            Path(path).unlink()
+            path.unlink()
 
     def test_load_full(self):
         data = {
@@ -60,12 +83,12 @@ class TestConfig:
                 "backup_count": 5,
             },
         }
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(data, f)
-            path = f.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
+            path = Path(f.name)
+        _write_toml(path, data)
 
         try:
-            cfg = Config.load(path)
+            cfg = Config.load(str(path))
             assert cfg.llm.model == "gpt-4o"
             assert cfg.llm.temperature == 0.7
             assert cfg.llm.max_tokens == 2048
@@ -75,4 +98,4 @@ class TestConfig:
             assert cfg.tools.read_truncate_mode == "head"
             assert cfg.logging.level == "DEBUG"
         finally:
-            Path(path).unlink()
+            path.unlink()
