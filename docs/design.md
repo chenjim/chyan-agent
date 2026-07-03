@@ -194,9 +194,10 @@ data/
 - 每轮对话结束追加到 `conversation.jsonl`，更新 `memories.json` 和 `meta.json`。
 - 提供 `reset()` 清空所有数据。
 
-### 6.4 BM25 记忆索引
+### 6.4 BM25 记忆索引 + jieba 中文分词
 
 - 启动时从 `memories.json` 加载所有记忆，用 `rank-bm25` 建立索引。
+- 中文分词使用 `jieba`，索引构建和查询时均按 jieba 分词结果处理；未安装 jieba 时降级为逐字拆分。
 - 每次调用 `remember` 工具新增记忆时，重建索引（记忆数量通常较少，重建开销可接受）。
 - `recall` 工具使用 BM25 算法对查询进行相关性排序，返回 top_k 条最匹配的记忆。
 
@@ -599,6 +600,7 @@ openai>=1.0.0,<2.0.0
 tiktoken>=0.7.0,<1.0.0
 matplotlib>=3.8.0,<4.0.0
 rank-bm25>=0.2.2,<1.0.0
+jieba>=0.42.1,<1.0.0
 pandas>=2.0.0,<3.0.0
 ```
 
@@ -606,7 +608,8 @@ pandas>=2.0.0,<3.0.0
 - `openai`：LLM API 调用，兼容 OpenAI 和其他 API。
 - `tiktoken`：精确 token 计数，支持 GPT-4/GPT-3.5 tokenizer。
 - `matplotlib`：压力测试可视化，生成上下文占用曲线图。
-- `rank-bm25`：长期记忆 BM25 相关性检索（纯 Python 实现，轻量无 C 依赖）。
+- `rank-bm25`：长期记忆 BM25 相关性检索，配合 `jieba` 做中文分词。
+- `jieba`：中文分词，提升 BM25 在中文记忆召回中的精度。
 - `pandas`：JSONL 日志读取与数据分析。
 
 **版本约束原则**：

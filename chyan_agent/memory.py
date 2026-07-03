@@ -13,6 +13,13 @@ except ImportError:
     HAS_BM25 = False
     logger.warning("rank_bm25 未安装，recall 将使用简单关键词匹配")
 
+try:
+    import jieba
+    HAS_JIEBA = True
+except ImportError:
+    HAS_JIEBA = False
+    logger.warning("jieba 未安装，中文分词降级为逐字拆分")
+
 
 class MemoryManager:
     def __init__(self, data_dir: str, recall_mode: str = "bm25", recall_top_k: int = 5):
@@ -46,20 +53,25 @@ class MemoryManager:
         with open(self.memories_file, "w", encoding="utf-8") as f:
             json.dump(self.memories, f, ensure_ascii=False, indent=2)
 
+    def _tokenize(self, text: str) -> list[str]:
+        if HAS_JIEBA:
+            return list(jieba.cut(text))
+        return list(text)
+
     def _rebuild_bm25_index(self):
         if not self.memories or not HAS_BM25:
             self.bm25_index = None
             return
 
         docs = [m["content"] for m in self.memories]
-        tokenized = [doc.split() for doc in docs]
+        tokenized = [self._tokenize(doc) for doc in docs]
         self.bm25_index = BM25Okapi(tokenized)
 
     def _simple_recall(self, query: str, top_k: int) -> list[dict]:
-        query_words = set(query.lower().split())
+        query_words = set(self._tokenize(query.lower()))
         scored = []
         for m in self.memories:
-            content_words = set(m["content"].lower().split())
+            content_words = set(self._tokenize(m["content"].lower()))
             score = len(query_words & content_words)
             if score > 0:
                 scored.append({**m, "relevance_score": score})
@@ -126,7 +138,7 @@ class MemoryManager:
     def _bm25_recall(self, query: str, top_k: int) -> list[dict]:
         if not self.bm25_index:
             return []
-        scores = self.bm25_index.get_scores(query.split())
+        scores = self.bm25_index.get_scores(self._tokenize(query))
         top_indices = sorted(
             range(len(scores)),
             key=lambda i: scores[i],
