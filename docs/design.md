@@ -1,0 +1,955 @@
+# chyan-agent 设计方案
+
+> 状态：最终版  
+> 目标：围绕「20K 上下文如何支撑 100 轮对话」构建一个最小可用、可运行、可演示的轻量 Agent。
+
+---
+
+## 1. 项目定位
+
+chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**。它要回答的核心问题是：
+
+> 当 LLM 上下文窗口只有 20K tokens 时，如何通过分层记忆 + 上下文预算 + 工具调用，支撑上百轮连贯对话？
+
+因此，所有设计选择都服务于「可解释、可验证、可复现」这三个目标。
+
+---
+
+## 2. 核心设计原则
+
+| 原则 | 说明 |
+|------|------|
+| 轻量 | 无 SQLite、无向量数据库、无重型依赖，JSON 文件持久化 |
+| 透明 | 上下文占用、工具调用、记忆召回都可打印、可审计 |
+| 真实 | 工具操作真实文件系统，不是 Mock |
+| 可验证 | 提供 100 轮压力测试脚本，输出上下文曲线 |
+
+---
+
+## 3. 文件结构
+
+```
+~/Project/chyan-agent/
+├── chyan_agent/
+│   ├── __init__.py
+│   ├── config.py          # 加载并校验 config.json
+│   ├── context.py         # 上下文预算管理：token 计数、摘要、裁剪
+│   ├── memory.py          # JSON 持久化：原始历史 + 长期记忆
+│   ├── tools.py           # 工具定义与执行
+│   ├── llm.py             # 统一 LLM 调用封装
+│   └── agent.py           # 主编排逻辑
+├── config.json            # 用户配置文件（需手动创建或复制模板）
+├── config.example.json    # 配置模板
+├── main.py                # 命令行交互入口
+├── scripts/
+│   └── run_100_turns.py   # 100 轮自动对话测试
+├── requirements.txt
+├── README.md
+└── docs/
+    └── design.md          # 本文件
+```
+
+---
+
+## 4. 配置系统（config.json）
+
+`chyan_agent/config.py` 负责读取 `config.json`，并提供类型安全的访问接口。
+
+### 4.1 配置项
+
+```json
+{
+  "llm": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "sk-...",
+    "model": "gpt-4o-mini",
+    "temperature": 0.3,
+    "max_tokens": 1024
+  },
+  "context": {
+    "context_limit": 20000,
+    "reserved_tokens": 6500,
+    "max_recent_turns": 4,
+    "summary_ratio": 0.4
+  },
+  "memory": {
+    "data_dir": "./data",
+    "recall_mode": "bm25",
+    "recall_top_k": 5
+  },
+  "system_prompt": "你是一个运行在 20K 上下文窗口下的轻量 Agent。\n\n核心规则：\n1. 当需要记住长期事实时，使用 remember 工具。\n2. 当需要回忆过往信息时，使用 recall 工具。\n3. 文件操作前先用 search 确认路径。\n4. 回复简洁，避免冗余。\n\n当前上下文预算有限，请优先使用工具而非依赖对话历史。",
+  "tools": {
+    "read_max_lines": 500,
+    "read_truncate_mode": "auto"
+  },
+  "logging": {
+    "level": "INFO",
+    "log_file": "./data/agent.log",
+    "max_bytes": 10485760,
+    "backup_count": 3
+  }
+}
+```
+
+### 4.2 关键参数说明
+
+**LLM 配置**：
+- `base_url`：OpenAI 兼容 API 地址。
+- `api_key`：API 密钥。
+- `model`：模型名称（如 gpt-4o-mini、gpt-4o）。
+- `temperature`：生成随机性（0-1，推荐 0.3）。
+- `max_tokens`：单次回复最大 token 数。
+
+**上下文配置**：
+- `context_limit`：总上下文上限，模拟 20K 场景。
+- `reserved_tokens`：给系统 prompt、工具定义、工具调用结果、模型回复预留的空间。该值应设置为**最坏情况**下的安全边界（工具返回大文件 + 长回复）。
+- `max_recent_turns`：保留最近完整对话轮数的上限。
+- `summary_ratio`：对单条历史消息做摘要时，目标压缩比例。
+- `usable_tokens = context_limit - count(system_prompt) - count(tool_definitions) - reserved_tokens`，这是 context.py 实际能用的历史消息预算。
+
+**记忆配置**：
+- `data_dir`：数据持久化目录。
+- `recall_mode`：记忆召回算法，支持 `"bm25"`（推荐）或 `"grep"`（简单关键词匹配）。
+- `recall_top_k`：召回记忆的默认数量。
+
+**工具配置**：
+- `read_max_lines`：单次 `read` 工具返回的最大行数，防止大文件占满上下文。
+- `read_truncate_mode`：截断模式
+  - `"auto"`：智能截断（前 N 行 + ... + 后 M 行，N+M = read_max_lines）
+  - `"head"`：只保留前 N 行
+  - `"tail"`：只保留后 N 行
+
+**日志配置**：
+- `level`：日志级别（DEBUG/INFO/WARNING/ERROR），推荐 INFO。
+- `log_file`：日志文件路径，相对于工作目录。
+- `max_bytes`：单个日志文件最大字节数（默认 10MB），超出后自动轮转。
+- `backup_count`：保留的历史日志文件数量（默认 3 个）。
+
+---
+
+## 5. 上下文管理系统（context.py）
+
+### 5.1 核心职责
+
+1. 精确计算每条消息 token 数（tiktoken），包括工具定义的 tokens。
+2. 维护三条消息队列：
+   - `system`：系统 prompt
+   - `summary`：压缩后的历史摘要
+   - `recent`：最近 N 轮完整对话
+3. 当总 token 超过 `usable_tokens` 时，按策略压缩。
+4. 对外提供 `build_messages(user_input)` → OpenAI messages 列表。
+5. 动态预留空间给预期的工具输出和模型回复，防止单次调用突破 context_limit。
+
+### 5.2 消息队列结构
+
+```python
+class ContextManager:
+    system: str
+    summary: str            # 一段长文本，概括更早的对话
+    recent: list[Message]   # 最近 N 轮完整对话
+```
+
+### 5.3 压缩策略
+
+当 `total_tokens > usable_tokens` 时：
+
+1. **初级压缩**：把 `recent` 中最老的一轮取出，交给 LLM 摘要，追加到 `summary`。
+2. **次级压缩**：如果 `summary` 超过 3000 tokens 硬上限，按 FIFO 策略丢弃最早的部分摘要内容，保留最近的关键信息。
+3. **底线保护**：确保 `system_prompt + 工具定义 + 最近 1 轮对话 + 预留空间` 始终可用，必要时完全清空 summary。
+
+**设计原则**：避免对 summary 做递归摘要（防止信息损失雪崩），采用固定容量 + FIFO 丢弃策略。
+
+### 5.4 摘要提示词
+
+```
+请把以下对话内容压缩为关键事实列表。保留：实体、决策、数值、待办。删除：寒暄、重复、语气词。
+输出用简洁中文 bullet points，不超过原文的 {ratio}% 长度。
+```
+
+### 5.5 Token 预算公式
+
+```
+fixed_cost = tokens(system_prompt) + tokens(tool_definitions)
+usable_for_history = context_limit - fixed_cost - reserved_tokens
+
+total_history = tokens(summary) + tokens(recent) ≤ usable_for_history
+```
+
+每次构建 messages 前重新计算，超出则触发压缩。`reserved_tokens` 用于预留给工具输出和模型回复的动态空间。
+
+---
+
+## 6. 记忆系统（memory.py）
+
+### 6.1 持久化文件
+
+所有数据存到 `memory.data_dir` 目录：
+
+```
+data/
+├── conversation.jsonl   # 原始完整对话历史，每行一条 JSON
+├── memories.json        # 长期记忆列表
+└── meta.json            # 当前 summary 与 recent 指针等运行时状态
+```
+
+### 6.2 数据模型
+
+**conversation.jsonl**
+```json
+{"turn": 1, "role": "user", "content": "...", "timestamp": "..."}
+{"turn": 1, "role": "assistant", "content": "...", "tool_calls": []}
+```
+
+**memories.json**
+```json
+[
+  {"id": "m1", "content": "用户偏好 Python", "source_turn": 3, "created_at": "..."},
+  {"id": "m2", "content": "项目使用 PostgreSQL", "source_turn": 7, "created_at": "..."}
+]
+```
+
+**meta.json**（可选快照文件）
+```json
+{
+  "summary": "",
+  "recent": [],
+  "total_turns": 0,
+  "last_updated": "...",
+  "version": 1
+}
+```
+
+### 6.3 生命周期
+
+- 启动时优先从 `meta.json` 恢复 `summary` 和 `recent`（快速启动）。
+- 如果 `meta.json` 不存在或版本不匹配，从 `conversation.jsonl` 重建上下文。
+- 每轮对话结束追加到 `conversation.jsonl`，更新 `memories.json` 和 `meta.json`。
+- 提供 `reset()` 清空所有数据。
+
+### 6.4 BM25 记忆索引
+
+- 启动时从 `memories.json` 加载所有记忆，用 `rank-bm25` 建立索引。
+- 每次调用 `remember` 工具新增记忆时，重建索引（记忆数量通常较少，重建开销可接受）。
+- `recall` 工具使用 BM25 算法对查询进行相关性排序，返回 top_k 条最匹配的记忆。
+
+**实现示例（memory.py 核心代码）**：
+```python
+from rank_bm25 import BM25Okapi
+import json
+
+class MemoryManager:
+    def __init__(self, data_dir: str):
+        self.data_dir = data_dir
+        self.memories = self._load_memories()
+        self.bm25_index = None
+        self._rebuild_bm25_index()
+    
+    def _rebuild_bm25_index(self):
+        if not self.memories:
+            self.bm25_index = None
+            return
+        
+        # 简单分词（中文可用 jieba，英文空格分割）
+        docs = [m["content"] for m in self.memories]
+        tokenized_docs = [doc.split() for doc in docs]
+        self.bm25_index = BM25Okapi(tokenized_docs)
+    
+    def recall(self, query: str, top_k: int = 5) -> list[dict]:
+        if not self.bm25_index:
+            return []
+        
+        # BM25 打分
+        scores = self.bm25_index.get_scores(query.split())
+        
+        # 获取 top-k 索引
+        top_indices = sorted(
+            range(len(scores)), 
+            key=lambda i: scores[i], 
+            reverse=True
+        )[:top_k]
+        
+        # 返回匹配的记忆（附带相关性分数）
+        results = []
+        for idx in top_indices:
+            if scores[idx] > 0:  # 只返回有相关性的结果
+                results.append({
+                    **self.memories[idx],
+                    "relevance_score": round(scores[idx], 3)
+                })
+        return results
+    
+    def remember(self, content: str, source_turn: int) -> str:
+        memory_id = f"m{len(self.memories) + 1}"
+        new_memory = {
+            "id": memory_id,
+            "content": content,
+            "source_turn": source_turn,
+            "created_at": datetime.now().isoformat()
+        }
+        self.memories.append(new_memory)
+        self._save_memories()
+        self._rebuild_bm25_index()  # 重建索引
+        return memory_id
+```
+
+---
+
+## 7. 工具系统（tools.py）
+
+### 7.1 工具列表
+
+| 工具 | 功能 | 是否操作真实文件 | 特殊说明 |
+|------|------|------------------|----------|
+| `read` | 读取指定文件内容 | 是 | 支持截断，防止大文件占满上下文 |
+| `write` | 写入/追加内容到文件 | 是 | 禁止覆盖敏感文件 |
+| `search` | 在目录中按文件名 glob 查找 | 是 | - |
+| `grep` | 在文件或目录中按正则搜索内容 | 是 | - |
+| `remember` | 把事实写入长期记忆 | 是（memories.json） | 自动重建 BM25 索引 |
+| `recall` | 从长期记忆中召回相关内容 | 是（BM25 相关性匹配） | 返回 top_k 条最相关记忆 |
+
+### 7.1.1 read 工具截断机制
+
+为防止单个文件占满上下文预算，`read` 工具实现智能截断：
+
+**配置参数**（来自 config.json）：
+- `read_max_lines`：最多返回行数（默认 500）
+- `read_truncate_mode`：截断模式（默认 "auto"）
+
+**截断策略**：
+```python
+def read_file(path: str, max_lines: int, mode: str) -> str:
+    lines = open(path).readlines()
+    
+    if len(lines) <= max_lines:
+        return ''.join(lines)
+    
+    if mode == "head":
+        return ''.join(lines[:max_lines]) + f"\n\n[截断：剩余 {len(lines) - max_lines} 行]"
+    
+    elif mode == "tail":
+        return f"[截断：省略前 {len(lines) - max_lines} 行]\n\n" + ''.join(lines[-max_lines:])
+    
+    elif mode == "auto":
+        # 前 70% + 后 30%
+        head_lines = int(max_lines * 0.7)
+        tail_lines = max_lines - head_lines
+        return (
+            ''.join(lines[:head_lines]) +
+            f"\n\n[截断：省略中间 {len(lines) - max_lines} 行]\n\n" +
+            ''.join(lines[-tail_lines:])
+        )
+```
+
+**工具返回示例**：
+```json
+{
+  "success": true,
+  "path": "src/main.py",
+  "total_lines": 1200,
+  "returned_lines": 500,
+  "truncated": true,
+  "content": "import os\n...\n[截断：省略中间 700 行]\n...\nif __name__ == '__main__':\n    main()"
+}
+```
+
+### 7.2 工具定义（OpenAI Function Calling Schema）
+
+每个工具都要提供：
+- `name`
+- `description`
+- `parameters`（JSON Schema）
+- `execute(**kwargs)` 函数
+
+**recall 工具示例**：
+```json
+{
+  "name": "recall",
+  "description": "从长期记忆中召回相关内容。使用自然语言描述你想找的信息（如'数据库配置'、'用户偏好语言'、'上次讨论的端口号'），系统会自动用 BM25 算法匹配最相关的记忆。",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "要查找的内容关键词或短语，支持多词组合"
+      },
+      "top_k": {
+        "type": "integer",
+        "default": 5,
+        "description": "返回最相关的 N 条记忆"
+      }
+    },
+    "required": ["query"]
+  }
+}
+```
+
+### 7.3 工具执行流程
+
+1. LLM 决定调用工具时，返回 `tool_calls`。
+2. `agent.py` 按顺序执行每个工具，收集结果。
+3. 把工具结果作为 `tool` 消息重新喂给 LLM。
+4. LLM 基于结果生成最终回复。
+
+### 7.4 安全边界
+
+- `write` 默认禁止覆盖 `config.json`、`.env` 等敏感文件（白名单机制）。
+- 所有文件操作限制在当前工作目录及其子目录。
+- 工具执行失败时返回结构化错误信息，包含建议的修复步骤，不抛异常中断对话。
+
+**错误信息示例**：
+```json
+{
+  "success": false,
+  "error": "文件不存在: src/main.py",
+  "suggestion": "使用 search 工具查找文件路径，或用 write 工具创建新文件"
+}
+```
+
+---
+
+## 8. LLM 调用层（llm.py）
+
+### 8.1 职责
+
+- 统一封装 OpenAI 兼容接口。
+- 支持 `chat.completions.create`。
+- 支持 tool calling。
+- 处理超时、重试、错误降级。
+
+### 8.2 接口
+
+```python
+class LLMClient:
+    def __init__(self, config: LLMConfig): ...
+    def chat(self, messages: list, tools: list | None = None) -> LLMResponse: ...
+```
+
+### 8.3 错误处理
+
+**超时与重试策略**：
+
+| 错误类型 | HTTP 状态码 | 重试策略 | 重试间隔 |
+|---------|-------------|---------|---------|
+| 请求超时 | Timeout (>30s) | 重试 2 次 | 1s, 2s |
+| 速率限制 | 429 | 重试 3 次 | 指数退避：1s, 2s, 4s |
+| 服务端错误 | 500, 502, 503, 504 | 重试 2 次 | 1s, 2s |
+| 客户端错误 | 400, 401, 403, 404 | 不重试 | - |
+| 无可用 key | 401 | 不重试，提示配置 | - |
+| 返回格式异常 | JSON 解析失败 | 不重试，记录日志 | - |
+
+**实现示例**：
+```python
+import time
+from openai import OpenAI, APIError, Timeout, RateLimitError
+
+class LLMClient:
+    def chat(self, messages: list, tools: list | None = None) -> LLMResponse:
+        for attempt in range(3):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.config.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=self.config.temperature,
+                    max_tokens=self.config.max_tokens,
+                    timeout=30
+                )
+                return self._parse_response(response)
+            
+            except Timeout as e:
+                if attempt < 2:
+                    wait = 2 ** attempt  # 1s, 2s
+                    logger.warning(f"API 超时，{wait}s 后重试 ({attempt+1}/2)")
+                    time.sleep(wait)
+                else:
+                    logger.error("API 超时，已达重试上限")
+                    raise
+            
+            except RateLimitError as e:
+                if attempt < 3:
+                    wait = 2 ** attempt  # 1s, 2s, 4s
+                    logger.warning(f"速率限制，{wait}s 后重试 ({attempt+1}/3)")
+                    time.sleep(wait)
+                else:
+                    logger.error("速率限制，已达重试上限")
+                    raise
+            
+            except APIError as e:
+                if e.status_code in [500, 502, 503, 504] and attempt < 2:
+                    wait = 2 ** attempt
+                    logger.warning(f"服务端错误 {e.status_code}，{wait}s 后重试")
+                    time.sleep(wait)
+                else:
+                    logger.error(f"API 错误 {e.status_code}: {e.message}")
+                    raise
+```
+
+### 8.4 日志系统
+
+使用 Python `logging` 模块，配合 `RotatingFileHandler` 实现日志轮转。
+
+**日志级别与内容**：
+
+| 级别 | 记录内容 | 示例 |
+|------|---------|------|
+| DEBUG | token 计数、压缩触发、BM25 打分详情 | `[DEBUG] 压缩触发: recent=4500 tokens, 移除最老 1 轮` |
+| INFO | 每轮对话摘要、工具调用 | `[INFO] Turn 5: user=读文件, tools=[read], tokens=4810/13500` |
+| WARNING | 接近预算、召回结果为空、文件不存在 | `[WARNING] 上下文占用 90%: 12500/13500 tokens` |
+| ERROR | API 失败、文件操作异常、配置错误 | `[ERROR] API 调用失败: 429 Rate Limit` |
+
+**初始化代码**：
+```python
+import logging
+from logging.handlers import RotatingFileHandler
+
+def setup_logger(config):
+    logger = logging.getLogger("chyan-agent")
+    logger.setLevel(getattr(logging, config.logging.level))
+    
+    # 文件处理器（自动轮转）
+    handler = RotatingFileHandler(
+        config.logging.log_file,
+        maxBytes=config.logging.max_bytes,
+        backupCount=config.logging.backup_count,
+        encoding='utf-8'
+    )
+    
+    # 格式化
+    formatter = logging.Formatter(
+        '[%(asctime)s] [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    
+    # 同时输出到控制台（可选）
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(formatter)
+    logger.addHandler(console)
+    
+    return logger
+```
+
+**日志输出示例**：
+```
+[2026-07-03 10:23:45] [INFO] Turn 1: user=帮我读 config.json, tokens=390/13500
+[2026-07-03 10:23:46] [INFO] 工具调用: read(path=config.json)
+[2026-07-03 10:23:47] [INFO] Turn 1 完成, assistant tokens=156
+[2026-07-03 10:24:12] [WARNING] 上下文占用 85%: 11500/13500 tokens
+[2026-07-03 10:24:13] [DEBUG] 压缩触发: 将 Turn 2 移入 summary, 节省 450 tokens
+[2026-07-03 10:25:30] [ERROR] API 超时，2s 后重试 (1/2)
+[2026-07-03 10:25:32] [INFO] API 重试成功
+```
+
+---
+
+## 9. Agent 编排（agent.py）
+
+### 9.1 主循环
+
+```python
+class Agent:
+    MAX_TOOL_ITERATIONS = 5  # 防止工具调用死循环
+    
+    def run_turn(self, user_input: str) -> str:
+        # 1. 构建上下文
+        messages = self.context.build_messages(user_input)
+
+        # 2. 第一次 LLM 调用（允许工具）
+        response = self.llm.chat(messages, tools=TOOLS)
+
+        # 3. 工具调用循环，带终止条件
+        for iteration in range(self.MAX_TOOL_ITERATIONS):
+            if not response.has_tool_calls():
+                break
+            
+            # 执行工具并添加结果到消息列表
+            tool_messages = self._execute_tool_calls(response.tool_calls)
+            messages.extend(tool_messages)
+            
+            # 再次调用 LLM
+            response = self.llm.chat(messages, tools=TOOLS)
+        else:
+            # 超过最大迭代次数
+            return "工具调用次数超过限制，请简化你的请求或分步操作"
+
+        # 4. 保存轮次
+        self.memory.save_turn(user_input, response.content, response.tool_calls)
+
+        # 5. 返回回复
+        return response.content
+```
+
+### 9.2 与上下文管理的协作
+
+- 调用 `build_messages` 时，context.py 自动完成摘要和裁剪。
+- `memory.save_turn` 保存完整原始内容到 `conversation.jsonl`，不受窗口限制影响。
+
+---
+
+## 10. 命令行入口（main.py）
+
+### 10.1 交互模式
+
+```bash
+python main.py --config config.json
+```
+
+交互界面：
+```
+chyan-agent > 帮我看看 src/main.py 的内容
+[read] src/main.py
+[回复内容]
+上下文：system=234 + summary=1456 + recent=3120 = 4810 / 13500 usable
+```
+
+### 10.2 支持命令
+
+| 命令 | 说明 | 输出示例 |
+|------|------|---------|
+| `/reset` | 清空当前对话上下文与记忆 | `已清空 45 轮对话和 12 条记忆` |
+| `/status` | 打印当前上下文占用情况 | `system=234, summary=1456, recent=3120, total=4810/13500 (36%)` |
+| `/memories` | 列出所有长期记忆 | `[m1] 用户偏好 Python (Turn 3)`<br>`[m2] 项目使用 PostgreSQL (Turn 7)` |
+| `/export` | 导出对话历史为 JSON | `已导出到 data/export_20260703_102345.json` |
+| `/exit` | 退出 | - |
+
+### 10.3 故障恢复机制
+
+**自动恢复**：
+- 每轮对话结束后，`conversation.jsonl` 和 `meta.json` 立即落盘（无缓存）。
+- 崩溃后重启，自动从 `meta.json` 恢复 `summary` 和 `recent` 状态。
+- 如果 `meta.json` 损坏或 `version` 不匹配，自动从 `conversation.jsonl` 重建（耗时但保证数据完整性）。
+
+**手动恢复**：
+```bash
+# 从指定轮次继续（跳过前 N 轮）
+python main.py --config config.json --resume-from-turn 50
+
+# 强制重建 meta.json（忽略现有快照）
+python main.py --config config.json --rebuild-context
+```
+
+**恢复日志示例**：
+```
+[2026-07-03 10:30:15] [INFO] 检测到 meta.json (version=1, turns=47)
+[2026-07-03 10:30:15] [INFO] 恢复上下文: summary=2340 tokens, recent=4 轮
+[2026-07-03 10:30:15] [INFO] 从 Turn 48 继续
+```
+
+---
+
+## 11. 100 轮压力测试（scripts/run_100_turns.py）
+
+### 11.1 目标
+
+验证在 20K 上下文限制下，Agent 能否稳定完成 100 轮对话，并观察：
+- 总 token 占用是否始终低于预算
+- summary 长度随轮次的变化
+- 记忆召回是否有效
+
+### 11.2 测试方式
+
+设计三种测试场景，覆盖不同的上下文压力模式：
+
+#### **场景 1：线性任务**（30 轮）
+**目标**：测试基本上下文管理和摘要压缩。
+
+**特点**：每轮独立，无依赖关系，模拟知识问答场景。
+
+**示例 prompts**：
+```
+1. 介绍一下 Python 语言的特点
+2. 什么是 Docker 容器技术
+3. 解释 REST API 的设计原则
+4. 说说微服务架构的优缺点
+5. 什么是 CI/CD
+...（共 30 条）
+```
+
+**预期结果**：
+- 前 10 轮：`recent` 持续增长，`summary` 为空
+- 第 11-30 轮：触发压缩，`summary` 逐渐增长，`recent` 保持在 `max_recent_turns` 以内
+- 总 token 占用稳定在 40%-60% 之间
+
+---
+
+#### **场景 2：依赖任务**（40 轮）
+**目标**：测试 `recent` 保留效果和跨轮依赖理解。
+
+**特点**：每条输入依赖前几轮结果（如"刚才的文件"、"上一步的结果"）。
+
+**示例 prompts**：
+```
+1. 创建一个名为 test.txt 的文件
+2. 往 test.txt 里写入 'Hello World'
+3. 读取 test.txt 的内容
+4. 在 test.txt 末尾追加一行 'Goodbye'
+5. 再读一次 test.txt，确认内容
+6. 创建 data.json 文件
+7. 往 data.json 写入 {"name": "test"}
+8. 读取 data.json
+9. 修改 data.json，增加字段 "version": 1
+10. 确认 data.json 的最终内容
+...（共 40 条，形成 4-5 条操作链）
+```
+
+**预期结果**：
+- `recent` 必须保留足够轮数（至少 4 轮），否则"刚才的文件"等指代会失效
+- 第 20 轮后开始频繁触发压缩
+- 总 token 占用在 50%-75% 之间波动
+
+---
+
+#### **场景 3：记忆召回压力**（30 轮）
+**目标**：测试 `remember`/`recall` 工具和 BM25 索引效果。
+
+**特点**：前期密集存储事实，中期无关对话，后期批量召回。
+
+**示例 prompts**：
+```
+1. 记住：我最喜欢的编程语言是 Python
+2. 记住：项目数据库使用 PostgreSQL 15
+3. 记住：API 服务运行在 8080 端口
+4. 记住：日志存储在 /var/log/app
+5. 记住：Redis 缓存过期时间是 3600 秒
+6-20. （15 轮无关对话，如"介绍 Rust"、"什么是 GraphQL"）
+21. 我最喜欢的编程语言是什么？
+22. 项目用的什么数据库？
+23. API 服务的端口号是多少？
+24. 日志文件在哪里？
+25. Redis 缓存多久过期？
+26-30. （5 轮混合查询，如"数据库和 Redis 的配置信息"）
+```
+
+**预期结果**：
+- 前 5 轮：每次调用 `remember`，`memories.json` 增加 1 条
+- 第 21-25 轮：每次调用 `recall`，BM25 精确召回对应记忆（Precision@5 > 90%）
+- 第 26-30 轮：多关键词查询，返回多条相关记忆并按相关性排序
+- `summary` 应包含"用户存储了 5 条记忆"等元信息
+
+---
+
+每轮记录 `system / summary / recent / total` token 数，生成 JSONL 日志和 matplotlib 曲线图。
+
+### 11.3 输出
+
+```
+output/
+├── turns_log.jsonl
+├── context_usage.png
+└── test_scenarios.json  # 测试用例定义
+```
+
+**test_scenarios.json 格式**：
+```json
+{
+  "scenarios": [
+    {
+      "type": "linear",
+      "description": "独立问题，测试基本上下文管理",
+      "turns": 30,
+      "prompts": [
+        "介绍一下 Python 语言的特点",
+        "什么是 Docker 容器技术",
+        "解释 REST API 的设计原则",
+        "说说微服务架构的优缺点",
+        "...（共 30 条）"
+      ]
+    },
+    {
+      "type": "dependency",
+      "description": "每条输入依赖前几轮结果，测试 recent 保留和 summary 压缩",
+      "turns": 40,
+      "prompts": [
+        "创建一个名为 test.txt 的文件",
+        "往 test.txt 里写入 'Hello World'",
+        "读取 test.txt 的内容",
+        "在 test.txt 末尾追加一行 'Goodbye'",
+        "再读一次 test.txt，确认内容",
+        "...（共 40 条，形成操作链）"
+      ]
+    },
+    {
+      "type": "memory_recall",
+      "description": "频繁调用 remember/recall，测试长期记忆索引效果",
+      "turns": 30,
+      "prompts": [
+        "记住：我最喜欢的编程语言是 Python",
+        "记住：项目数据库使用 PostgreSQL 15",
+        "记住：API 服务运行在 8080 端口",
+        "介绍一下 Rust 语言",
+        "...（10 轮无关对话）",
+        "我最喜欢的编程语言是什么？",
+        "项目用的什么数据库？",
+        "...（共 30 条，穿插记忆存取）"
+      ]
+    }
+  ],
+  "metadata": {
+    "total_turns": 100,
+    "created_at": "2026-07-03T10:00:00",
+    "description": "100 轮压力测试场景定义"
+  }
+}
+```
+
+**输出 JSONL 格式**（每行一个 JSON 对象）：
+```jsonl
+{"turn": 1, "scenario": "linear", "system_tokens": 234, "summary_tokens": 0, "recent_tokens": 156, "total_tokens": 390, "usable_limit": 13500, "compression_triggered": false, "tool_calls": [], "timestamp": "2026-07-03T10:23:45"}
+{"turn": 2, "scenario": "linear", "system_tokens": 234, "summary_tokens": 0, "recent_tokens": 312, "total_tokens": 546, "usable_limit": 13500, "compression_triggered": false, "tool_calls": ["read"], "timestamp": "2026-07-03T10:23:48"}
+{"turn": 5, "scenario": "dependency", "system_tokens": 234, "summary_tokens": 450, "recent_tokens": 1200, "total_tokens": 1884, "usable_limit": 13500, "compression_triggered": true, "tool_calls": ["write", "recall"], "timestamp": "2026-07-03T10:24:01"}
+```
+
+**JSONL 格式优势**：
+- 流式追加：每轮测试结束立即写入一行，无需缓存全部数据
+- 结构化：支持复杂类型（数组、对象），可记录每轮的工具调用详情
+- 与项目一致：与 `conversation.jsonl` 格式统一
+- 易于分析：pandas 可直接读取 `pd.read_json("turns_log.jsonl", lines=True)`
+
+### 11.4 可视化输出
+
+**context_usage.png 图表内容**：
+
+使用 matplotlib 生成双子图，展示上下文占用趋势：
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# 读取日志
+df = pd.read_json("output/turns_log.jsonl", lines=True)
+
+# 创建双子图
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+
+# 图1：token 占用堆叠面积图
+ax1.fill_between(df['turn'], 0, df['system_tokens'], label='System', alpha=0.7)
+ax1.fill_between(df['turn'], df['system_tokens'], 
+                 df['system_tokens'] + df['summary_tokens'], 
+                 label='Summary', alpha=0.7)
+ax1.fill_between(df['turn'], df['system_tokens'] + df['summary_tokens'], 
+                 df['total_tokens'], label='Recent', alpha=0.7)
+ax1.axhline(y=13500, color='r', linestyle='--', label='Usable Limit')
+ax1.axhline(y=20000, color='k', linestyle='--', label='Context Limit')
+ax1.set_xlabel('Turn')
+ax1.set_ylabel('Tokens')
+ax1.set_title('上下文占用趋势（堆叠）')
+ax1.legend()
+ax1.grid(alpha=0.3)
+
+# 图2：压缩事件时间线
+compression_turns = df[df['compression_triggered'] == True]['turn']
+ax2.scatter(compression_turns, [1]*len(compression_turns), 
+            color='red', s=100, alpha=0.6, label='Compression')
+ax2.set_xlabel('Turn')
+ax2.set_yticks([])
+ax2.set_title('压缩触发时间线')
+ax2.legend()
+ax2.grid(axis='x', alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('output/context_usage.png', dpi=150)
+```
+
+**预期图表**：
+- 图1 显示：
+  - 蓝色区域（System）保持恒定
+  - 橙色区域（Summary）阶梯式增长（每次压缩增加一块）
+  - 绿色区域（Recent）锯齿状波动（增长后突然下降）
+  - 总占用始终低于红色虚线（usable_limit）
+  
+- 图2 显示：
+  - 红点标记每次压缩触发的轮次
+  - 线性任务：稀疏分布（每 5-8 轮一次）
+  - 依赖任务：密集分布（每 3-4 轮一次）
+  - 记忆召回：前期密集，后期稀疏
+
+---
+
+## 12. 与博文的结合点
+
+| 博文章节 | 对应代码/演示 |
+|----------|---------------|
+| 为什么 20K 不够 | `context.py` 预算计算 |
+| 分层记忆设计 | `summary` + `recent` + `memories.json` |
+| 摘要压缩策略 | `context.py` 的 `compress()` |
+| 工具调用与记忆协同 | `tools.py` 的 `remember/recall` |
+| 100 轮验证 | `scripts/run_100_turns.py` |
+
+---
+
+## 13. 依赖清单
+
+```txt
+# requirements.txt
+openai>=1.0.0,<2.0.0
+tiktoken>=0.7.0,<1.0.0
+matplotlib>=3.8.0,<4.0.0
+rank-bm25>=0.2.2,<1.0.0
+pandas>=2.0.0,<3.0.0
+```
+
+**依赖说明**：
+- `openai`：LLM API 调用，兼容 OpenAI 和其他 API。
+- `tiktoken`：精确 token 计数，支持 GPT-4/GPT-3.5 tokenizer。
+- `matplotlib`：压力测试可视化，生成上下文占用曲线图。
+- `rank-bm25`：长期记忆 BM25 相关性检索（纯 Python 实现，轻量无 C 依赖）。
+- `pandas`：JSONL 日志读取与数据分析。
+
+**版本约束原则**：
+- 使用 `>=X.Y.Z,<(X+1).0.0` 格式，允许小版本更新，禁止大版本跃迁。
+- 生产环境建议用 `pip freeze > requirements.lock` 锁定精确版本。
+
+**安装**：
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 14. 关键风险与验证建议
+
+### 14.1 最高风险点
+
+| 风险 | 影响 | 验证方式 | **预期指标** |
+|------|------|---------|-------------|
+| 动态 token 预算不准 | 实际 token 突破 20K 限制 | 对比 tiktoken 与 API 返回的 `usage.total_tokens` | **误差 < 5%，100 轮无越界** |
+| 摘要压缩信息丢失 | 早期重要信息在 50+ 轮后无法召回 | 人工检查 summary 内容 + 场景 2 依赖任务准确率 | **依赖任务成功率 > 95%** |
+| BM25 召回精度不足 | `recall` 返回无关记忆 | 准备 10 组查询-记忆对，计算 Precision@5 | **Precision@5 > 90%** |
+| 工具输出过大 | 单个 `read` 返回 5K tokens 文件 | 测试读取 2000 行文件，验证截断机制 | **单次工具输出 < 2000 tokens** |
+| 工具调用死循环 | Agent 反复调用同一工具 | 场景 2 依赖任务中监控工具调用次数 | **单轮工具调用 ≤ 5 次** |
+
+**性能基线**：
+- 单轮平均响应时间：< 3 秒（不含 LLM API 延迟）
+- 100 轮总耗时：< 10 分钟（gpt-4o-mini）
+- 内存占用：< 100MB（不含模型加载）
+- 日志文件大小：< 5MB（100 轮）
+
+### 14.2 分阶段验证
+
+**阶段 1：核心模块验证（3-5 天）**
+1. 实现 `context.py`，用 20 条固定消息测试压缩逻辑。
+2. 实现 `memory.py`，测试 BM25 召回 10 条记忆的准确率。
+3. 验证 token 计数准确性（与 OpenAI API 对比误差 < 5%）。
+
+**阶段 2：小规模集成（2-3 天）**
+4. 实现 `agent.py` + `tools.py`，跑通 20 轮完整对话。
+5. 观察上下文增长曲线，调整 `reserved_tokens` 和 `max_recent_turns`。
+6. 测试工具调用链路（read → grep → write 连续操作）。
+
+**阶段 3：100 轮压力测试（2-3 天）**
+7. 实现 `scripts/run_100_turns.py`，执行三种场景。
+8. 生成上下文占用曲线图，确认始终低于 20K。
+9. 人工抽查 10 轮对话，验证回复质量和记忆召回准确性。
+
+---
+
+## 15. 下一步工作
+
+1. 创建 `chyan_agent/` 包结构与各模块代码。
+2. 创建 `config.example.json`。
+3. 实现 `main.py` CLI。
+4. 实现 `scripts/run_100_turns.py`。
+5. 按 14.2 节分阶段验证。
+6. 把运行结果写入博文 source.md。
