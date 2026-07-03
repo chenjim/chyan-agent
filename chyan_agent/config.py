@@ -13,10 +13,10 @@ class LLMConfig:
 
 @dataclass
 class ContextConfig:
-    context_limit: int = 20000
-    reserved_tokens: int = 6500
-    max_recent_turns: int = 4
-    summary_ratio: float = 0.4
+    context_limit: int = 10000
+    reserved_tokens: int = 3500
+    max_recent_turns: int = 2
+    summary_ratio: float = 0.3
 
 
 @dataclass

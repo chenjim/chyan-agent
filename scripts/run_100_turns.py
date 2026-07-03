@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""100 轮压力测试：验证 20K 上下文下 Agent 的稳定性。"""
+"""100 轮压力测试：验证 10K 上下文下 Agent 的稳定性。"""
 import json
 import logging
 import sys

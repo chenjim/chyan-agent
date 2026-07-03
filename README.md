@@ -1,12 +1,12 @@
 # chyan-agent
 
-> 20K 上下文窗口下的轻量 Agent — 分层记忆 + 上下文预算 + 工具调用，支撑上百轮连贯对话。
+> 10K 上下文窗口下的轻量 Agent — 分层记忆 + 上下文预算 + 工具调用，支撑上百轮连贯对话。
 
 ## 项目定位
 
 chyan-agent **不是**一个通用 Agent 框架，而是一个**工程演示项目**。它要回答的核心问题是：
 
-> 当 LLM 上下文窗口只有 20K tokens 时，如何通过分层记忆 + 上下文预算 + 工具调用，支撑上百轮连贯对话？
+> 当 LLM 上下文窗口只有 10K tokens 时，如何通过分层记忆 + 上下文预算 + 工具调用，支撑上百轮连贯对话？
 
 所有设计选择都服务于**可解释、可验证、可复现**这三个目标。
 
@@ -46,6 +46,8 @@ chyan-agent/
 ### 1. 安装依赖
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 

@@ -21,7 +21,7 @@ class TestConfig:
             assert cfg.llm.api_key == "sk-test"
             assert cfg.llm.model == "gpt-4o-mini"
             assert cfg.system_prompt == "You are a test agent."
-            assert cfg.context.context_limit == 20000
+            assert cfg.context.context_limit == 10000
             assert cfg.memory.data_dir == "./data"
             assert cfg.tools.read_max_lines == 500
             assert cfg.logging.level == "INFO"

@@ -1,7 +1,7 @@
 # chyan-agent 设计方案
 
 > 状态：最终版  
-> 目标：围绕「20K 上下文如何支撑 100 轮对话」构建一个最小可用、可运行、可演示的轻量 Agent。
+> 目标：围绕「10K 上下文如何支撑 100 轮对话」构建一个最小可用、可运行、可演示的轻量 Agent。
 
 ---
 
@@ -9,7 +9,7 @@
 
 chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**。它要回答的核心问题是：
 
-> 当 LLM 上下文窗口只有 20K tokens 时，如何通过分层记忆 + 上下文预算 + 工具调用，支撑上百轮连贯对话？
+> 当 LLM 上下文窗口只有 10K tokens 时，如何通过分层记忆 + 上下文预算 + 工具调用，支撑上百轮连贯对话？
 
 因此，所有设计选择都服务于「可解释、可验证、可复现」这三个目标。
 
@@ -67,17 +67,17 @@ chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**
     "max_tokens": 1024
   },
   "context": {
-    "context_limit": 20000,
-    "reserved_tokens": 6500,
-    "max_recent_turns": 4,
-    "summary_ratio": 0.4
+    "context_limit": 10000,
+    "reserved_tokens": 3500,
+    "max_recent_turns": 2,
+    "summary_ratio": 0.3
   },
   "memory": {
     "data_dir": "./data",
     "recall_mode": "bm25",
     "recall_top_k": 5
   },
-  "system_prompt": "你是一个运行在 20K 上下文窗口下的轻量 Agent。\n\n核心规则：\n1. 当需要记住长期事实时，使用 remember 工具。\n2. 当需要回忆过往信息时，使用 recall 工具。\n3. 文件操作前先用 search 确认路径。\n4. 回复简洁，避免冗余。\n\n当前上下文预算有限，请优先使用工具而非依赖对话历史。",
+  "system_prompt": "你是一个运行在 10K 上下文窗口下的轻量 Agent。\n\n核心规则：\n1. 当需要记住长期事实时，使用 remember 工具。\n2. 当需要回忆过往信息时，使用 recall 工具。\n3. 文件操作前先用 search 确认路径。\n4. 回复简洁，避免冗余。\n\n当前上下文预算有限，请优先使用工具而非依赖对话历史。",
   "tools": {
     "read_max_lines": 500,
     "read_truncate_mode": "auto"
@@ -101,7 +101,7 @@ chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**
 - `max_tokens`：单次回复最大 token 数。
 
 **上下文配置**：
-- `context_limit`：总上下文上限，模拟 20K 场景。
+- `context_limit`：总上下文上限，模拟 10K 场景。
 - `reserved_tokens`：给系统 prompt、工具定义、工具调用结果、模型回复预留的空间。该值应设置为**最坏情况**下的安全边界（工具返回大文件 + 长回复）。
 - `max_recent_turns`：保留最近完整对话轮数的上限。
 - `summary_ratio`：对单条历史消息做摘要时，目标压缩比例。
@@ -643,7 +643,7 @@ python main.py --config config.json --rebuild-context
 
 ### 11.1 目标
 
-验证在 20K 上下文限制下，Agent 能否稳定完成 100 轮对话，并观察：
+验证在 10K 上下文限制下，Agent 能否稳定完成 100 轮对话，并观察：
 - 总 token 占用是否始终低于预算
 - summary 长度随轮次的变化
 - 记忆召回是否有效
@@ -830,8 +830,8 @@ ax1.fill_between(df['turn'], df['system_tokens'],
                  label='Summary', alpha=0.7)
 ax1.fill_between(df['turn'], df['system_tokens'] + df['summary_tokens'], 
                  df['total_tokens'], label='Recent', alpha=0.7)
-ax1.axhline(y=13500, color='r', linestyle='--', label='Usable Limit')
-ax1.axhline(y=20000, color='k', linestyle='--', label='Context Limit')
+ax1.axhline(y=6500, color='r', linestyle='--', label='Usable Limit')
+ax1.axhline(y=10000, color='k', linestyle='--', label='Context Limit')
 ax1.set_xlabel('Turn')
 ax1.set_ylabel('Tokens')
 ax1.set_title('上下文占用趋势（堆叠）')
@@ -871,7 +871,7 @@ plt.savefig('output/context_usage.png', dpi=150)
 
 | 博文章节 | 对应代码/演示 |
 |----------|---------------|
-| 为什么 20K 不够 | `context.py` 预算计算 |
+| 为什么 10K 不够 | `context.py` 预算计算 |
 | 分层记忆设计 | `summary` + `recent` + `memories.json` |
 | 摘要压缩策略 | `context.py` 的 `compress()` |
 | 工具调用与记忆协同 | `tools.py` 的 `remember/recall` |
@@ -914,7 +914,7 @@ pip install -r requirements.txt
 
 | 风险 | 影响 | 验证方式 | **预期指标** |
 |------|------|---------|-------------|
-| 动态 token 预算不准 | 实际 token 突破 20K 限制 | 对比 tiktoken 与 API 返回的 `usage.total_tokens` | **误差 < 5%，100 轮无越界** |
+| 动态 token 预算不准 | 实际 token 突破 10K 限制 | 对比 tiktoken 与 API 返回的 `usage.total_tokens` | **误差 < 5%，100 轮无越界** |
 | 摘要压缩信息丢失 | 早期重要信息在 50+ 轮后无法召回 | 人工检查 summary 内容 + 场景 2 依赖任务准确率 | **依赖任务成功率 > 95%** |
 | BM25 召回精度不足 | `recall` 返回无关记忆 | 准备 10 组查询-记忆对，计算 Precision@5 | **Precision@5 > 90%** |
 | 工具输出过大 | 单个 `read` 返回 5K tokens 文件 | 测试读取 2000 行文件，验证截断机制 | **单次工具输出 < 2000 tokens** |
@@ -940,7 +940,7 @@ pip install -r requirements.txt
 
 **阶段 3：100 轮压力测试（2-3 天）**
 7. 实现 `scripts/run_100_turns.py`，执行三种场景。
-8. 生成上下文占用曲线图，确认始终低于 20K。
+8. 生成上下文占用曲线图，确认始终低于 10K。
 9. 人工抽查 10 轮对话，验证回复质量和记忆召回准确性。
 
 ---

@@ -4,10 +4,10 @@ from chyan_agent.config import ContextConfig
 
 def _make_ctx(max_recent_turns=4):
     cfg = ContextConfig(
-        context_limit=20000,
-        reserved_tokens=6500,
-        max_recent_turns=max_recent_turns,
-        summary_ratio=0.4,
+        context_limit=10000,
+        reserved_tokens=3500,
+        max_recent_turns=2,
+        summary_ratio=0.3,
     )
     return ContextManager(
         context_config=cfg,
