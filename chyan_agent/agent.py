@@ -11,19 +11,19 @@ logger = logging.getLogger("chyan-agent")
 
 
 class Agent:
-    MAX_TOOL_ITERATIONS = 5
-
     def __init__(
         self,
         llm_client: LLMClient,
         context_manager: ContextManager,
         memory_manager: MemoryManager,
         tool_executor: ToolExecutor,
+        max_tool_iterations: int = 5,
     ):
         self.llm = llm_client
         self.context = context_manager
         self.memory = memory_manager
         self.tool_executor = tool_executor
+        self.max_tool_iterations = max_tool_iterations
 
         self.current_turn = 0
 
@@ -65,7 +65,7 @@ class Agent:
         messages = self.context.build_messages(user_input)
         tool_schemas = self.tool_executor.get_schemas()
 
-        for iteration in range(self.MAX_TOOL_ITERATIONS):
+        for iteration in range(self.max_tool_iterations):
             response = self.llm.chat(messages, tools=tool_schemas)
 
             if not response.tool_calls:

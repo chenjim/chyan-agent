@@ -30,6 +30,7 @@ class MemoryConfig:
 class ToolConfig:
     read_max_lines: int = 500
     read_truncate_mode: str = "auto"
+    max_tool_iterations: int = 5
 
 
 @dataclass

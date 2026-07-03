@@ -82,6 +82,7 @@ def main():
         context_manager=context,
         memory_manager=memory,
         tool_executor=tool_executor,
+        max_tool_iterations=config.tools.max_tool_iterations,
     )
 
     if args.rebuild_context:
