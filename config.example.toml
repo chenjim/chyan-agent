@@ -1,9 +1,21 @@
+[prompt]
+system = """\
+你是一个运行在 10K 上下文窗口下的轻量 Agent。
+
+核心规则：
+1. 当需要记住长期事实时，使用 remember 工具。
+2. 当需要回忆过往信息时，使用 recall 工具。
+3. 文件操作前先用 search 确认路径。
+4. 回复简洁，避免冗余。
+
+当前上下文预算有限，请优先使用工具而非依赖对话历史。"""
+
 [llm]
 base_url = "https://api.openai.com/v1"
 api_key = "sk-your-key-here"
 model = "gpt-4o-mini"
 temperature = 0.3
-max_tokens = 2048
+max_tokens = 1024
 
 [context]
 context_limit = 10000
@@ -15,17 +27,6 @@ summary_ratio = 0.3
 data_dir = "./data"
 recall_mode = "bm25"
 recall_top_k = 5
-
-system_prompt = """\
-你是一个运行在 10K 上下文窗口下的轻量 Agent。
-
-核心规则：
-1. 当需要记住长期事实时，使用 remember 工具。
-2. 当需要回忆过往信息时，使用 recall 工具。
-3. 文件操作前先用 search 确认路径。
-4. 回复简洁，避免冗余。
-
-当前上下文预算有限，请优先使用工具而非依赖对话历史。"""
 
 [tools]
 read_max_lines = 500

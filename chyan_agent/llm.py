@@ -48,7 +48,14 @@ class LLMClient:
                     kwargs["tools"] = tools
 
                 response = self.client.chat.completions.create(**kwargs)
-                return self._parse_response(response)
+                parsed = self._parse_response(response)
+                if parsed.usage:
+                    logger.info(
+                        f"API: prompt={parsed.usage.get('prompt_tokens', '?')}, "
+                        f"completion={parsed.usage.get('completion_tokens', '?')}, "
+                        f"total={parsed.usage.get('total_tokens', '?')}"
+                    )
+                return parsed
 
             except APITimeoutError as e:
                 if attempt < 2:

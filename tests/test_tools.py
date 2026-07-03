@@ -18,7 +18,7 @@ class TestToolExecutor:
 
     def test_schemas_count(self):
         schemas = self.te.get_schemas()
-        assert len(schemas) == 6
+        assert len(schemas) == 7
         for s in schemas:
             assert s["type"] == "function"
             assert "name" in s["function"]
@@ -116,6 +116,23 @@ class TestToolExecutor:
         result = self.te.execute("read", path=str(path))
         assert result["success"]
         assert result["truncated"]
+
+    def test_delete_file(self):
+        path = Path(self.tmpdir) / "to_delete.txt"
+        path.write_text("delete me")
+        result = self.te.execute("delete", path=str(path))
+        assert result["success"]
+        assert result["action"] == "deleted"
+        assert not path.exists()
+
+    def test_delete_sensitive_blocked(self):
+        result = self.te.execute("delete", path="config.toml")
+        assert not result["success"]
+        assert "禁止" in result["error"]
+
+    def test_delete_not_found(self):
+        result = self.te.execute("delete", path="/not/exist")
+        assert not result["success"]
 
     def test_unknown_tool(self):
         result = self.te.execute("nonexistent", foo="bar")

@@ -31,8 +31,8 @@ def _toml_val(v):
 class TestConfig:
     def test_load_valid(self):
         data = {
+            "prompt": {"system": "You are a test agent."},
             "llm": {"base_url": "https://test.com/v1", "api_key": "sk-test"},
-            "system_prompt": "You are a test agent.",
         }
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
             path = Path(f.name)
@@ -71,7 +71,7 @@ class TestConfig:
                 "recall_mode": "grep",
                 "recall_top_k": 3,
             },
-            "system_prompt": "custom prompt",
+            "prompt": {"system": "custom prompt"},
             "tools": {
                 "read_max_lines": 200,
                 "read_truncate_mode": "head",

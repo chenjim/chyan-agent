@@ -6,6 +6,9 @@ from pathlib import Path
 logger = logging.getLogger("chyan-agent")
 
 SENSITIVE_FILES = {"config.toml", "config.example.toml", ".env", ".env.local"}
+EXCLUDE_DIRS = {".venv", "venv", ".git", "__pycache__", "node_modules", ".idea", ".vscode"}
+MAX_SEARCH_RESULTS = 30
+MAX_GREP_RESULTS = 10
 
 
 class ToolExecutor:
@@ -104,6 +107,17 @@ class ToolExecutor:
                     "required": ["query"],
                 },
             },
+            {
+                "name": "delete",
+                "description": "删除文件或空目录。无法删除非空目录。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "要删除的文件或空目录路径"},
+                    },
+                    "required": ["path"],
+                },
+            },
         ]
         return [
             {"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}}
@@ -183,13 +197,28 @@ class ToolExecutor:
         if not p.exists():
             return {"success": False, "error": f"目录不存在: {path}"}
 
-        matching = list(p.rglob(pattern))
+        matching = []
+        try:
+            for f in p.rglob(pattern):
+                try:
+                    rel = f.relative_to(p)
+                    if any(part.startswith(".") or part in EXCLUDE_DIRS for part in rel.parts):
+                        continue
+                    matching.append(str(rel))
+                    if len(matching) >= MAX_SEARCH_RESULTS:
+                        break
+                except (ValueError, OSError):
+                    continue
+        except (PermissionError, OSError):
+            pass
+
         return {
             "success": True,
             "path": str(p),
             "pattern": pattern,
-            "results": [str(f.relative_to(p)) for f in matching],
+            "results": matching,
             "count": len(matching),
+            "truncated": len(matching) >= MAX_SEARCH_RESULTS,
         }
 
     def _grep(self, path: str, pattern: str, include: str = None) -> dict:
@@ -201,7 +230,20 @@ class ToolExecutor:
         if p.is_file():
             files_to_check = [p]
         else:
-            files_to_check = list(p.rglob(include or "*"))
+            files_to_check = []
+            try:
+                for fp in p.rglob(include or "*"):
+                    try:
+                        rel = fp.relative_to(p)
+                        if any(part.startswith(".") or part in EXCLUDE_DIRS for part in rel.parts):
+                            continue
+                        files_to_check.append(fp)
+                        if len(files_to_check) > MAX_GREP_RESULTS * 10:
+                            break
+                    except (ValueError, OSError):
+                        continue
+            except (PermissionError, OSError):
+                pass
 
         for fp in files_to_check:
             if fp.is_dir() or fp.name.startswith("."):
@@ -221,6 +263,8 @@ class ToolExecutor:
                         "matches": len(matches),
                         "lines": lines_info,
                     })
+                    if len(matching_files) >= MAX_GREP_RESULTS:
+                        break
             except Exception:
                 continue
 
@@ -230,6 +274,7 @@ class ToolExecutor:
             "pattern": pattern,
             "results": matching_files,
             "count": len(matching_files),
+            "truncated": len(matching_files) >= MAX_GREP_RESULTS,
         }
 
     def _remember(self, content: str) -> dict:
@@ -244,6 +289,21 @@ class ToolExecutor:
             "results": results,
             "count": len(results),
         }
+
+    def _delete(self, path: str) -> dict:
+        p = Path(path).resolve()
+        if not p.exists():
+            return {"success": False, "error": f"文件不存在: {path}"}
+        if p.name in SENSITIVE_FILES:
+            return {"success": False, "error": f"禁止删除敏感文件: {p.name}"}
+        try:
+            if p.is_dir():
+                p.rmdir()
+            else:
+                p.unlink()
+            return {"success": True, "path": str(p), "action": "deleted"}
+        except OSError as e:
+            return {"success": False, "error": f"删除失败: {e}"}
 
     def execute(self, name: str, **kwargs) -> dict:
         logger.info(f"工具调用: {name}({kwargs})")
@@ -260,6 +320,8 @@ class ToolExecutor:
                 return self._remember(kwargs["content"])
             elif name == "recall":
                 return self._recall(kwargs["query"], kwargs.get("top_k", 5))
+            elif name == "delete":
+                return self._delete(kwargs["path"])
             else:
                 return {"success": False, "error": f"未知工具: {name}"}
         except Exception as e:

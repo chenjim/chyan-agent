@@ -96,6 +96,13 @@ class Agent:
                     "tool_call_id": tc.id,
                     "content": json.dumps(result, ensure_ascii=False),
                 })
+
+            msg_tokens = self.context._count_messages_tokens(messages)
+            if msg_tokens > self.context.config.context_limit:
+                logger.warning(
+                    f"工具结果导致上下文超限 ({msg_tokens}>{self.context.config.context_limit})，提前结束"
+                )
+                return "工具执行结果过大，请简化操作或分步进行"
         else:
             return "工具调用次数超过限制，请简化你的请求或分步操作"
 

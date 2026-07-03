@@ -12,3 +12,8 @@ venv/
 .idea/
 .vscode/
 data/
+output/
+test.txt
+data.json
+notes.md
+src/

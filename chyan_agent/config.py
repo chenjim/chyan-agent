@@ -66,7 +66,7 @@ class Config:
             llm=llm,
             context=context,
             memory=memory,
-            system_prompt=data.get("system_prompt", ""),
+            system_prompt=data.get("prompt", {}).get("system", ""),
             tools=tools,
             logging=logging,
         )

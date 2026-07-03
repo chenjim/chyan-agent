@@ -107,7 +107,7 @@ class TestAgent:
 
         agent = self._make_agent()
         response = agent.run_turn("search everything")
-        assert "超过限制" in response
+        assert "工具执行结果过大" in response or "超过限制" in response
 
     def test_get_status(self):
         self.llm.chat.return_value = Mock(

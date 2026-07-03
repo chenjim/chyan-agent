@@ -140,4 +140,4 @@ python scripts/run_100_turns.py
 
 ## 许可
 
-MIT © chyan.tech
+MIT © [chyan.tech](https://chyan.tech)

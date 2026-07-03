@@ -100,9 +100,9 @@ SCENARIOS = [
             "确认 data.json 完整内容",
             "删除 src/__init__.py",
             "确认 src 目录当前文件列表",
-            "创建一个 README.md 写一行项目简介",
-            "读取 README.md 确认",
-            "清理所有测试文件（删除 src 目录、data.json、notes.md）",
+            "创建一个 test_readme.md 写一行项目简介",
+            "读取 test_readme.md 确认",
+            "清理所有测试文件（删除 src 目录、data.json、notes.md、test_readme.md）",
         ],
     },
     {
@@ -178,6 +178,7 @@ def create_agent(config_path: str):
         context_manager=context,
         memory_manager=memory,
         tool_executor=tool_executor,
+        max_tool_iterations=config.tools.max_tool_iterations,
     )
     return agent, config
 
@@ -288,6 +289,9 @@ def main():
 
 def _generate_chart(jsonl_path: Path, png_path: Path):
     try:
+        import matplotlib
+        matplotlib.rcParams["font.sans-serif"] = ["Noto Sans CJK SC", "SimHei", "WenQuanYi Micro Hei", "DejaVu Sans"]
+        matplotlib.rcParams["axes.unicode_minus"] = False
         import matplotlib.pyplot as plt
 
         df = pd.read_json(jsonl_path, lines=True)
