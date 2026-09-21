@@ -16,6 +16,7 @@ from chyan_agent.context import ContextManager
 from chyan_agent.memory import MemoryManager
 from chyan_agent.tools import ToolExecutor
 from chyan_agent.agent import Agent
+from chyan_agent.model_windows import resolve_context_limit
 
 
 def setup_logging(config):
@@ -47,7 +48,7 @@ def setup_logging(config):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="chyan-agent - 10K 上下文轻量 Agent")
+    parser = argparse.ArgumentParser(description="chyan-agent - 自适应上下文轻量 Agent")
     parser.add_argument("--config", default="config.toml", help="配置文件路径")
     parser.add_argument("--resume-from-turn", type=int, default=None, help="从指定轮次恢复")
     parser.add_argument("--rebuild-context", action="store_true", help="强制从 conversation.jsonl 重建上下文")
@@ -56,6 +57,12 @@ def main():
     config = Config.load(args.config)
     setup_logging(config)
     logger = logging.getLogger("chyan-agent")
+
+    limit, source = resolve_context_limit(config.llm.model, config.context)
+    config.context.context_limit = limit
+    logger.info(
+        f"上下文窗口: model={config.llm.model}, limit={limit}, source={source}"
+    )
 
     llm = LLMClient(config.llm)
     memory = MemoryManager(
@@ -107,7 +114,8 @@ def main():
         "/exit": "退出",
     }
 
-    print("chyan-agent - 10K 上下文轻量 Agent")
+    print("chyan-agent - 自适应上下文轻量 Agent")
+    print(f"模型 {config.llm.model}，上下文窗口 {config.context.context_limit} tokens（来源：{source}）")
     print("输入 /help 查看命令列表")
     print()
 
@@ -137,11 +145,18 @@ def main():
             s = agent.get_status()
             pct = s["total_history"] / s["usable_limit"] * 100 if s["usable_limit"] > 0 else 0
             print(
+                f"model={config.llm.model}, "
+                f"window={s['context_limit']}, "
+                f"soft={s['soft_limit']}, "
+                f"hard={s['usable_limit']}"
+            )
+            print(
                 f"system={s['system_tokens']}, "
-                f"summary={s['summary_tokens']}, "
+                f"summary={s['summary_tokens']}(cap={s['summary_cap']}), "
                 f"recent={s['recent_tokens']}, "
                 f"total={s['total_history']}/{s['usable_limit']} "
-                f"({pct:.0f}%)"
+                f"({pct:.0f}%), "
+                f"bytes={s['history_bytes']}/{s['trigger_bytes']}"
             )
             continue
         elif user_input == "/memories":

@@ -11,9 +11,14 @@ from chyan_agent.agent import Agent
 @dataclass
 class FakeContextConfig:
     context_limit: int = 10000
+    default_limit: int = 32768
     reserved_tokens: int = 3500
+    trigger_ratio: float = 0.7
+    trigger_bytes: int = 204800
     max_recent_turns: int = 2
     summary_ratio: float = 0.3
+    summary_max_tokens: int = 0
+    summary_max_ratio: float = 0.15
 
 
 @dataclass

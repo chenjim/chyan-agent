@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""100 轮压力测试：验证 10K 上下文下 Agent 的稳定性。"""
+"""100 轮压力测试：验证自适应上下文窗口下 Agent 的稳定性。"""
 import json
 import logging
 import sys
@@ -17,6 +17,7 @@ from chyan_agent.context import ContextManager
 from chyan_agent.memory import MemoryManager
 from chyan_agent.tools import ToolExecutor
 from chyan_agent.agent import Agent
+from chyan_agent.model_windows import resolve_context_limit
 
 logger = logging.getLogger("chyan-agent")
 
@@ -155,6 +156,9 @@ def setup_logging():
 
 def create_agent(config_path: str):
     config = Config.load(config_path)
+    limit, source = resolve_context_limit(config.llm.model, config.context)
+    config.context.context_limit = limit
+    logger.info(f"上下文窗口: model={config.llm.model}, limit={limit}, source={source}")
     llm = LLMClient(config.llm)
     memory = MemoryManager(
         data_dir=config.memory.data_dir,

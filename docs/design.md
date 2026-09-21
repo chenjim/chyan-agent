@@ -1,16 +1,19 @@
 # chyan-agent 设计方案
 
-> 状态：最终版  
-> 目标：围绕「10K 上下文如何支撑 100 轮对话」构建一个最小可用、可运行、可演示的轻量 Agent。
+> 状态：最终版（自适应上下文窗口）
+> 目标：让 Agent 按所用模型自动适配上下文窗口，在用量达到阈值时自动压缩，
+> 构建一个最小可用、可运行、可演示的轻量 Agent。
 
 ---
 
 ## 1. 项目定位
 
-chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**。它要回答的核心问题是：
+chyan-agent 不是一个通用 Agent 框架，而是一个**轻量、可解释、可验证**的 Agent。它要回答的核心问题是：
 
-> 当 LLM 上下文窗口只有 10K tokens 时，如何通过分层记忆 + 上下文预算 + 工具调用，支撑上百轮连贯对话？
+> 如何按所用模型的上下文窗口自动适配预算，并在用量达到默认阈值时自动压缩历史，
+> 通过分层记忆 + 上下文预算 + 工具调用，支撑上百轮连贯对话？
 
+窗口大小分层解析：**配置覆盖 > 可选联网目录 > 内置模型表 > 兜底默认**。
 因此，所有设计选择都服务于「可解释、可验证、可复现」这三个目标。
 
 ---
@@ -33,7 +36,9 @@ chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**
 ├── chyan_agent/
 │   ├── __init__.py
 │   ├── config.py          # 加载并校验 config.toml
-│   ├── context.py         # 上下文预算管理：token 计数、摘要、裁剪
+│   ├── model_windows.py   # 模型上下文窗口分层解析（JSON 窗口表 + 可选联网目录）
+│   ├── model_windows.json # 具体模型名 -> 窗口 tokens（可自定义）
+│   ├── context.py         # 上下文预算管理：token 计数、阈值压缩、摘要
 │   ├── memory.py          # JSON 持久化：原始历史 + 长期记忆
 │   ├── tools.py           # 工具定义与执行
 │   ├── llm.py             # 统一 LLM 调用封装
@@ -46,6 +51,7 @@ chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**
 ├── requirements.txt
 ├── README.md
 └── docs/
+    ├── requirements.md    # 需求说明（与实现保持一致）
     └── design.md          # 本文件
 ```
 
@@ -69,11 +75,20 @@ chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**
 - `max_tokens`：单次回复最大 token 数。
 
 **上下文配置**：
-- `context_limit`：总上下文上限，模拟 10K 场景。
-- `reserved_tokens`：给系统 prompt、工具定义、工具调用结果、模型回复预留的空间。该值应设置为**最坏情况**下的安全边界（工具返回大文件 + 长回复）。
-- `max_recent_turns`：保留最近完整对话轮数的上限。
-- `summary_ratio`：对单条历史消息做摘要时，目标压缩比例。
-- `usable_tokens = context_limit - count(system_prompt) - count(tool_definitions) - reserved_tokens`，这是 context.py 实际能用的历史消息预算。
+- `context_limit`：`"auto"` 表示按 `llm.model` 自动解析窗口；也可写整数（如 `10000`）显式覆盖。
+- `default_limit`：auto 解析不到模型窗口时的兜底值（默认 131072）。
+- `reserved_tokens`：给工具调用结果、模型回复预留的空间。该值应设置为**最坏情况**下的安全边界。
+- `trigger_ratio`：压缩软阈值，占可用预算的比例（默认 0.7）。
+- `trigger_bytes`：压缩的第二道保险，原始历史文本字节数（默认 204800，即 200KB）；与 `trigger_ratio` 任一满足即压缩。
+- `compress_target_ratio`：压缩目标水位，压到「触发阈值 × 该比例」（默认 0.8），形成滞回，避免临界抖动导致每轮都压缩。
+- `max_recent_turns`：压缩时保护的最近完整对话轮数（默认 4），**不再作为硬性裁剪上限**。
+- `summary_ratio`：对历史消息做一级摘要时的目标压缩比例。
+- `summary_max_tokens` / `summary_max_ratio`：`summary` 二级压缩上限；前者为 0 时按后者（占可用预算比例）自动计算。
+- `window_table`：内置窗口表 JSON 路径；留空使用随包的 `chyan_agent/model_windows.json`。
+- `online_catalog` / `catalog_url` / `catalog_proxy` / `catalog_cache` / `catalog_ttl_hours`：可选联网模型目录（models.dev），默认关闭以保证离线确定性。
+- `usable_tokens = context_limit - count(system_prompt) - count(tool_definitions) - reserved_tokens`，这是 context.py 实际能用的历史消息**硬上限**；`soft_limit = usable_tokens * trigger_ratio` 是压缩触发线。
+
+**窗口解析（model_windows.py）**：分层策略，先命中先用——配置显式值 > 可选联网目录（带缓存与 TTL，失败降级）> 内置模型表（按**具体模型名**精确映射，对日期/版本后缀做最长前缀容错）> 兜底默认。解析结果与来源在启动时打印。
 
 **记忆配置**：
 - `data_dir`：数据持久化目录。
@@ -104,9 +119,9 @@ chyan-agent 不是一个通用 Agent 框架，而是一个**工程演示项目**
    - `system`：系统 prompt
    - `summary`：压缩后的历史摘要
    - `recent`：最近 N 轮完整对话
-3. 当总 token 超过 `usable_tokens` 时，按策略压缩。
+3. 当历史用量达到阈值（`soft_limit` 或 `trigger_bytes`）时，按策略压缩。
 4. 对外提供 `build_messages(user_input)` → OpenAI messages 列表。
-5. 动态预留空间给预期的工具输出和模型回复，防止单次调用突破 context_limit。
+5. 动态预留空间给预期的工具输出和模型回复，防止单次调用突破 `context_limit`。
 
 ### 5.2 消息队列结构
 
@@ -119,13 +134,18 @@ class ContextManager:
 
 ### 5.3 压缩策略
 
-当 `total_tokens > usable_tokens` 时：
+当 `history_tokens + 本轮 > soft_limit` **或** `history_bytes + 本轮 > trigger_bytes` 时：
 
-1. **初级压缩**：把 `recent` 中最老的一轮取出，交给 LLM 摘要，追加到 `summary`。
-2. **次级压缩**：如果 `summary` 超过 3000 tokens 硬上限，按 FIFO 策略丢弃最早的部分摘要内容，保留最近的关键信息。
-3. **底线保护**：确保 `system_prompt + 工具定义 + 最近 1 轮对话 + 预留空间` 始终可用，必要时完全清空 summary。
+1. **一级压缩（批量）**：从 `recent` 中批量弹出最老的若干轮（直到回到阈值内，或只剩保护轮数），
+   **合并为一次 LLM 摘要**追加到 `summary`。批量而非逐轮，可显著降低 LLM 调用次数。
+2. **保护最近轮**：始终保留最近 `max_recent_turns` 轮完整原文，不参与摘要。
+   `add_turn` 不再硬性裁剪 `recent`，裁剪统一由压缩负责。
+3. **二级压缩**：`summary` 超过上限时，先对 `summary` 自身再摘要一次（仅当严重超限，避免信息损失雪崩），
+   仍超则按 FIFO 截断，保留尾部并前缀 `…`。
+4. **底线保护**：仅当清空 `summary` 确实能回到阈值内时才清空，优先保住最近对话。
 
-**设计原则**：避免对 summary 做递归摘要（防止信息损失雪崩），采用固定容量 + FIFO 丢弃策略。
+**设计原则**：一级压缩允许批量、二级压缩克制递归（只在严重超限时再摘要），
+避免信息损失雪崩，同时保证大窗口下 `summary` 不会无界增长。
 
 ### 5.4 摘要提示词
 
@@ -137,13 +157,16 @@ class ContextManager:
 ### 5.5 Token 预算公式
 
 ```
-fixed_cost = tokens(system_prompt) + tokens(tool_definitions)
-usable_for_history = context_limit - fixed_cost - reserved_tokens
+fixed_cost   = tokens(system_prompt) + tokens(tool_definitions)
+hard_limit   = context_limit - fixed_cost - reserved_tokens   # 历史硬上限
+soft_limit   = hard_limit * trigger_ratio                     # 压缩触发线
+触发条件     = history_tokens + 本轮 > soft_limit
+              或 history_bytes + 本轮 > trigger_bytes         # 任一满足
 
-total_history = tokens(summary) + tokens(recent) ≤ usable_for_history
+total_history = tokens(summary) + tokens(recent) ≤ hard_limit
 ```
 
-每次构建 messages 前重新计算，超出则触发压缩。`reserved_tokens` 用于预留给工具输出和模型回复的动态空间。
+每次构建 messages 前重新计算，达到任一阈值则触发压缩。`reserved_tokens` 用于预留给工具输出和模型回复的动态空间。
 
 ---
 
@@ -358,20 +381,19 @@ class LLMClient:
 
 | 级别 | 记录内容 | 示例 |
 |------|---------|------|
-| DEBUG | token 计数、压缩触发、BM25 打分详情 | `[DEBUG] 压缩触发: recent=4500 tokens, 移除最老 1 轮` |
-| INFO | 每轮对话摘要、工具调用 | `[INFO] Turn 5: user=读文件, tools=[read], tokens=4810/13500` |
-| WARNING | 接近预算、召回结果为空、文件不存在 | `[WARNING] 上下文占用 90%: 12500/13500 tokens` |
+| DEBUG | token 计数、压缩触发、BM25 打分详情 | `[DEBUG] 压缩触发: 批量弹出 3 轮, summary 12345 -> 8200 tokens` |
+| INFO | 每轮对话摘要、工具调用 | `[INFO] Turn 5: user=读文件, tools=[read], tokens=4810/124000` |
+| WARNING | 接近预算、召回结果为空、文件不存在 | `[WARNING] 上下文仍超出窗口: 130200 > 131072` |
 | ERROR | API 失败、文件操作异常、配置错误 | `[ERROR] API 调用失败: 429 Rate Limit` |
 
 初始化代码参见 [`main.py`](../main.py)。
 
 **日志输出示例**：
 ```
-[2026-07-03 10:23:45] [INFO] Turn 1: user=帮我读 config.json, tokens=390/13500
+[2026-07-03 10:23:45] [INFO] Turn 1: user=帮我读 config.json, tokens=390/124000
 [2026-07-03 10:23:46] [INFO] 工具调用: read(path=config.json)
 [2026-07-03 10:23:47] [INFO] Turn 1 完成, assistant tokens=156
-[2026-07-03 10:24:12] [WARNING] 上下文占用 85%: 11500/13500 tokens
-[2026-07-03 10:24:13] [DEBUG] 压缩触发: 将 Turn 2 移入 summary, 节省 450 tokens
+[2026-07-03 10:24:12] [DEBUG] 压缩触发: 批量弹出 3 轮, summary 12345 -> 8200 tokens
 [2026-07-03 10:25:30] [ERROR] API 超时，2s 后重试 (1/2)
 [2026-07-03 10:25:32] [INFO] API 重试成功
 ```
@@ -404,7 +426,7 @@ python main.py --config config.toml
 chyan-agent > 帮我看看 src/main.py 的内容
 [read] src/main.py
 [回复内容]
-上下文：system=234 + summary=1456 + recent=3120 = 4810 / 13500 usable
+上下文：system=234 + summary=1456 + recent=3120 = 4810 / 124000 hard
 ```
 
 ### 10.2 支持命令
@@ -412,7 +434,7 @@ chyan-agent > 帮我看看 src/main.py 的内容
 | 命令 | 说明 | 输出示例 |
 |------|------|---------|
 | `/reset` | 清空当前对话上下文与记忆 | `已清空 45 轮对话和 12 条记忆` |
-| `/status` | 打印当前上下文占用情况 | `system=234, summary=1456, recent=3120, total=4810/13500 (36%)` |
+| `/status` | 打印当前上下文占用情况 | `window=131072, soft=87000, hard=124000`<br>`system=234, summary=1456(cap=18000), recent=3120, total=4810/124000 (4%), bytes=18234/204800` |
 | `/memories` | 列出所有长期记忆 | `[m1] 用户偏好 Python (Turn 3)`<br>`[m2] 项目使用 PostgreSQL (Turn 7)` |
 | `/export` | 导出对话历史为 JSON | `已导出到 data/export_20260703_102345.json` |
 | `/exit` | 退出 | - |
@@ -446,9 +468,9 @@ python main.py --config config.toml --rebuild-context
 
 ### 11.1 目标
 
-验证在 10K 上下文限制下，Agent 能否稳定完成 100 轮对话，并观察：
-- 总 token 占用是否始终低于预算
-- summary 长度随轮次的变化
+验证在自适应窗口（默认按模型解析）下，Agent 能否稳定完成 100 轮对话，并观察：
+- 总 token 占用是否始终低于硬上限，且压缩后回落到软阈值内
+- summary 长度随轮次的变化，是否受二级压缩上限约束
 - 记忆召回是否有效
 
 ### 11.2 测试方式
@@ -584,9 +606,9 @@ output/
 
 | 博文章节 | 对应代码/演示 |
 |----------|---------------|
-| 为什么 10K 不够 | `context.py` 预算计算 |
+| 为什么固定窗口不够 | `model_windows.py` 窗口解析 + `context.py` 预算计算 |
 | 分层记忆设计 | `summary` + `recent` + `memories.json` |
-| 摘要压缩策略 | `context.py` 的 `compress()` |
+| 阈值压缩策略 | `context.py` 的 `_compress_to_fit` / `_shrink_summary` |
 | 工具调用与记忆协同 | `tools.py` 的 `remember/recall` |
 | 100 轮验证 | `scripts/run_100_turns.py` |
 
@@ -629,7 +651,7 @@ pip install -r requirements.txt
 
 | 风险 | 影响 | 验证方式 | **预期指标** |
 |------|------|---------|-------------|
-| 动态 token 预算不准 | 实际 token 突破 10K 限制 | 对比 tiktoken 与 API 返回的 `usage.total_tokens` | **误差 < 5%，100 轮无越界** |
+| 动态 token 预算不准 | 实际 token 突破窗口限制 | 对比 tiktoken 与 API 返回的 `usage.total_tokens` | **误差 < 5%，100 轮无越界** |
 | 摘要压缩信息丢失 | 早期重要信息在 50+ 轮后无法召回 | 人工检查 summary 内容 + 场景 2 依赖任务准确率 | **依赖任务成功率 > 95%** |
 | BM25 召回精度不足 | `recall` 返回无关记忆 | 准备 10 组查询-记忆对，计算 Precision@5 | **Precision@5 > 90%** |
 | 工具输出过大 | 单个 `read` 返回 5K tokens 文件 | 测试读取 2000 行文件，验证截断机制 | **单次工具输出 < 2000 tokens** |
@@ -655,7 +677,7 @@ pip install -r requirements.txt
 
 **阶段 3：100 轮压力测试**
 1. 实现 `scripts/run_100_turns.py`，执行三种场景。
-2. 生成上下文占用曲线图，确认始终低于 10K。
+2. 生成上下文占用曲线图，确认始终低于窗口硬上限。
 3. 人工抽查 10 轮对话，验证回复质量和记忆召回准确性。
 
 ---

@@ -8,7 +8,7 @@
 [prompt]
 # Agent 系统提示词，定义 Agent 的行为规则和上下文策略
 system = """\
-你是一个运行在 10K 上下文窗口下的轻量 Agent。
+你是一个自适应上下文窗口的轻量 Agent，会根据当前模型的窗口大小自动管理对话历史。
 
 核心规则：
 1. 当需要记住长期事实时，使用 remember 工具。
@@ -16,7 +16,7 @@ system = """\
 3. 文件操作前先用 search 确认路径。
 4. 回复简洁，避免冗余。
 
-当前上下文预算有限，请优先使用工具而非依赖对话历史。"""
+当历史接近预算时会自动压缩为摘要，请优先使用工具而非依赖完整对话历史。"""
 
 # ------------------------------------------------------------
 # LLM 配置
@@ -26,34 +26,66 @@ system = """\
 base_url = "https://opencode.ai/zen/go/v1"
 
 # API 密钥
-api_key = "sk-euVUxblNGrht7hzyIRxpcXxpEJMvYEDwzEHNA90WCGDqw4HF603AVeweDCmejfeO"
+api_key = "sk-oEcLxm4Zsi6Zrpl26CVB2GCEiWbh8iKwjvEnvambjMymr17l3HZyaNAcIAyHU2P5"
 
 # 模型名称，如 mimo-v2.5-pro, deepseek-v4-pro, kimi-k2.7-code, glm-5.2 等
-model = "deepseek-v4-flash"
+model = "deepseek-v4.1-flash"
 
 # 温度参数，控制输出随机性，范围 0.0-2.0
 # 0.0 = 确定性输出，1.0 = 平衡，2.0 = 高随机性
-temperature = 0.3
+temperature = 0.1
 
 # 单次响应最大 token 数
-max_tokens = 1024
+max_tokens = 4096
 
 # ------------------------------------------------------------
 # 上下文管理配置
 # ------------------------------------------------------------
 [context]
 # 上下文窗口总 token 限制
-context_limit = 10000
+#   "auto" - 按 llm.model 自动解析（配置覆盖 > 内置模型表 > 联网目录 > 兜底默认）
+#   整数   - 显式指定，如 10000
+context_limit = "auto"
 
-# 为系统提示、工具定义等保留的 token 数
-reserved_tokens = 3500
+# auto 解析不到模型窗口时的兜底值
+default_limit = 131072
 
-# 保留的最近对话轮次数，用于上下文压缩时保护最近消息
-max_recent_turns = 2
+# 内置模型窗口表 JSON 路径；留空使用随包的 chyan_agent/model_windows.json
+# 可复制一份到 ./data 自定义（键为具体模型名，值为窗口 tokens）
+window_table = ""
 
-# 压缩比例，超出限制时将中间对话压缩为摘要的比例
+# 为系统提示、工具定义、工具结果、模型回复预留的 token 数
+reserved_tokens = 4096
+
+# 压缩触发阈值：占「可用预算」的比例（软阈值，达到即压缩）
+trigger_ratio = 0.7
+
+# 压缩触发阈值：原始历史文本字节数（第二道保险，与 trigger_ratio 任一满足即压缩）
+trigger_bytes = 204800
+
+# 压缩目标水位：压缩到「触发阈值 × 该比例」，形成滞回，避免临界抖动导致每轮都压缩
+compress_target_ratio = 0.8
+
+# 压缩时保护的最近对话轮数（保留完整原文，不参与摘要）
+max_recent_turns = 4
+
+# 单条历史摘要的目标压缩比例
 # 0.3 表示压缩后保留 30% 的原始信息量
 summary_ratio = 0.3
+
+# summary 二级压缩上限；0 表示按 summary_max_ratio 自动
+summary_max_tokens = 0
+
+# summary 上限占「可用预算」的比例（summary_max_tokens=0 时生效）
+summary_max_ratio = 0.15
+
+# 可选联网模型目录（models.dev），默认关闭以保证离线确定性
+online_catalog = true
+catalog_url = "https://models.dev/api.json"
+# 需要代理时填写，如 "http://192.168.31.165:7890"
+catalog_proxy = "http://192.168.31.165:7890"
+catalog_cache = "./data/model_catalog.json"
+catalog_ttl_hours = 168
 
 # ------------------------------------------------------------
 # 记忆系统配置

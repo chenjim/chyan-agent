@@ -44,7 +44,12 @@ class TestConfig:
             assert cfg.llm.api_key == "sk-test"
             assert cfg.llm.model == "gpt-4o-mini"
             assert cfg.system_prompt == "You are a test agent."
-            assert cfg.context.context_limit == 10000
+            assert cfg.context.context_limit == "auto"
+            assert cfg.context.trigger_ratio == 0.7
+            assert cfg.context.trigger_bytes == 204800
+            assert cfg.context.compress_target_ratio == 0.8
+            assert cfg.context.max_recent_turns == 4
+            assert cfg.context.online_catalog is False
             assert cfg.memory.data_dir == "./data"
             assert cfg.tools.read_max_lines == 500
             assert cfg.logging.level == "INFO"
@@ -65,6 +70,11 @@ class TestConfig:
                 "reserved_tokens": 4000,
                 "max_recent_turns": 6,
                 "summary_ratio": 0.3,
+                "trigger_ratio": 0.8,
+                "trigger_bytes": 102400,
+                "summary_max_tokens": 2048,
+                "online_catalog": True,
+                "catalog_proxy": "http://127.0.0.1:7890",
             },
             "memory": {
                 "data_dir": "/tmp/test_data",
@@ -94,6 +104,11 @@ class TestConfig:
             assert cfg.llm.max_tokens == 2048
             assert cfg.context.context_limit == 16000
             assert cfg.context.max_recent_turns == 6
+            assert cfg.context.trigger_ratio == 0.8
+            assert cfg.context.trigger_bytes == 102400
+            assert cfg.context.summary_max_tokens == 2048
+            assert cfg.context.online_catalog is True
+            assert cfg.context.catalog_proxy == "http://127.0.0.1:7890"
             assert cfg.memory.recall_mode == "grep"
             assert cfg.tools.read_truncate_mode == "head"
             assert cfg.logging.level == "DEBUG"
