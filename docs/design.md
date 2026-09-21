@@ -234,12 +234,21 @@ data/
 
 | 工具 | 功能 | 是否操作真实文件 | 特殊说明 |
 |------|------|------------------|----------|
-| `read` | 读取指定文件内容 | 是 | 支持截断，防止大文件占满上下文 |
+| `read` | 读取文件内容 | 是 | 支持 `offset/limit` 行范围；整文件智能截断 |
 | `write` | 写入/追加内容到文件 | 是 | 禁止覆盖敏感文件 |
-| `search` | 在目录中按文件名 glob 查找 | 是 | - |
-| `grep` | 在文件或目录中按正则搜索内容 | 是 | - |
+| `edit` | 精确字符串替换 | 是 | 唯一匹配，或 `replace_all` |
+| `list` | 列目录 | 是 | 跳过隐藏文件/EXCLUDE_DIRS，可设 depth |
+| `search` | 按文件名 glob 查找 | 是 | - |
+| `grep` | 按正则搜索内容 | 是 | - |
+| `delete` | 删除文件或空目录 | 是 | 禁止删除敏感文件 |
 | `remember` | 把事实写入长期记忆 | 是（memories.json） | 自动重建 BM25 索引 |
-| `recall` | 从长期记忆中召回相关内容 | 是（BM25 相关性匹配） | 返回 top_k 条最相关记忆 |
+| `recall` | 从长期记忆中召回 | 是（BM25） | 返回 top_k 条 |
+| `todo_write` / `todo_read` | 会话内任务清单 | 否（内存） | 整表覆盖 |
+| `bash` | 受限 shell 执行命令 | 是（子进程） | 需 `bash_enabled`；危险命令拦截、超时、输出上限、目录限制 |
+| `web_fetch` / `web_search` | 抓网页 / 搜索 | 否（网络） | 需 `web_enabled`；可配 `web_proxy` |
+
+**统一约束（见 7.5）**：工具结果受 `tool_output_max_bytes` 统一截断；文件与命令受 `work_dir` 目录限制；
+未启用的 `bash`/`web` 不注册 schema，不计入 fixed tokens。
 
 ### 7.1.1 read 工具截断机制
 
@@ -326,8 +335,10 @@ def read_file(path: str, max_lines: int, mode: str) -> str:
 
 ### 7.4 安全边界
 
-- `write` 默认禁止覆盖 `config.toml`、`config.json`、`.env` 等敏感文件（白名单机制）。
-- 所有文件操作限制在当前工作目录及其子目录。
+- `write`/`edit`/`delete` 默认禁止操作 `config.toml`、`config.example.toml`、`.env` 等敏感文件（黑名单机制）。
+- 文件操作与 `bash` 受 `work_dir` 限制：路径/工作目录超出该根目录即拒绝（`work_dir` 为空则不限制）。
+- `bash` 默认关闭；启用后拦截危险命令模式（`rm -rf /`、`mkfs`、`dd of=/dev/...`、`sudo`、`curl|sh` 等），
+  并有超时与输出字节上限。
 - 工具执行失败时返回结构化错误信息，包含建议的修复步骤，不抛异常中断对话。
 
 **错误信息示例**：
@@ -338,6 +349,13 @@ def read_file(path: str, max_lines: int, mode: str) -> str:
   "suggestion": "使用 search 工具查找文件路径，或用 write 工具创建新文件"
 }
 ```
+
+### 7.5 输出预算与工具门控
+
+- **统一输出预算**：`execute()` 返回前对结果 JSON 做 `tool_output_max_bytes` 检查，超出则截断为
+  `{"truncated_output": true, "note": ..., "preview": ...}`，避免单个工具结果挤爆上下文。
+- **工具门控**：`bash_enabled` / `web_enabled` 为假时，对应 schema 不注册，节省 fixed tokens，
+  且在未启用时调用返回明确错误而非静默失败。
 
 ---
 

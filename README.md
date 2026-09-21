@@ -123,12 +123,20 @@ soft_limit = hard_limit * trigger_ratio                       # 压缩触发线
 
 | 工具         | 功能                         |
 | ------------ | ---------------------------- |
-| `read`     | 读取文件内容（支持智能截断） |
+| `read`     | 读取文件内容（`offset/limit` 行范围 + 智能截断） |
 | `write`    | 写入/追加内容到文件          |
+| `edit`     | 精确字符串替换（改文件首选） |
+| `list`     | 列出目录内容                 |
 | `search`   | 按文件名 glob 查找           |
 | `grep`     | 按正则搜索文件内容           |
+| `delete`   | 删除文件或空目录             |
 | `remember` | 把事实写入长期记忆           |
 | `recall`   | 从长期记忆中召回归档信息     |
+| `todo_write` / `todo_read` | 会话内任务清单 |
+| `bash` | 执行命令（需 `bash_enabled`；危险命令拦截/超时/输出上限） |
+| `web_fetch` / `web_search` | 抓网页 / 联网搜索（需 `web_enabled`） |
+
+所有工具结果受 `tool_output_max_bytes` 统一截断；文件与命令受 `work_dir` 目录限制。
 
 ## 测试
 

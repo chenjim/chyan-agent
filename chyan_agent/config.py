@@ -56,6 +56,16 @@ class ToolConfig:
     read_max_lines: int = 500
     read_truncate_mode: str = "auto"
     max_tool_iterations: int = 5
+    tool_output_max_bytes: int = 20000
+    work_dir: str = ""
+    bash_enabled: bool = False
+    bash_timeout: int = 30
+    bash_workdir: str = ""
+    bash_max_output_bytes: int = 20000
+    web_enabled: bool = False
+    web_proxy: str = ""
+    web_max_bytes: int = 20000
+    web_search_url: str = "https://html.duckduckgo.com/html/?q={query}"
 
 
 @dataclass

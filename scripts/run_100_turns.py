@@ -4,6 +4,7 @@ import json
 import logging
 import sys
 import time
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -166,10 +167,7 @@ def create_agent(config_path: str):
         recall_top_k=config.memory.recall_top_k,
     )
     tool_executor = ToolExecutor(memory)
-    tool_executor.update_config({
-        "read_max_lines": config.tools.read_max_lines,
-        "read_truncate_mode": config.tools.read_truncate_mode,
-    })
+    tool_executor.update_config(asdict(config.tools))
     tool_schemas = tool_executor.get_schemas()
     context = ContextManager(
         context_config=config.context,

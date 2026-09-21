@@ -23,7 +23,8 @@ scripts/run_100_turns.py   docs/{requirements,design}.md
 - 窗口解析：分层（配置覆盖 > 可选联网目录 > 内置模型表 > 兜底默认），`context_limit="auto"`
 - 上下文预算：`hard = context_limit - fixed_cost - reserved_tokens`；`soft = hard * trigger_ratio`；达 soft 或 `trigger_bytes` 自动压缩（批量摘要/保护最近N轮/summary 二级压缩）
 - 记忆：短期(最近N轮)→中长期摘要→长期事实(BM25召回)
-- 工具：read/write/search/grep/remember/recall/delete
+- 工具：read(offset/limit)/write/edit/list/search/grep/delete/remember/recall/todo_write/todo_read；bash、web_fetch/web_search 默认关（配置开启）
+- 工具安全：结果受 `tool_output_max_bytes` 统一截断；文件与命令受 `work_dir` 限制；bash 拦截危险命令
 
 ## 约定
 - 轻量：无 SQLite/向量库，JSON 持久化；可打印、可审计；操作真实文件系统

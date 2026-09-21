@@ -116,6 +116,28 @@ read_truncate_mode = "auto"
 # 单轮对话中工具调用的最大迭代次数，防止无限循环
 max_tool_iterations = 10
 
+# 单个工具结果统一字节上限，超出截断为 preview（保护上下文）
+tool_output_max_bytes = 20000
+
+# 文件操作/命令的工作目录根；留空表示不限制（建议设置为项目根目录）
+work_dir = ""
+
+# bash 执行命令工具（默认关闭）
+bash_enabled = true
+bash_timeout = 30
+# bash 默认工作目录；留空则用 work_dir
+bash_workdir = ""
+bash_max_output_bytes = 20000
+
+# 联网工具 web_fetch / web_search（默认关闭）
+web_enabled = true
+# 需要代理时填写，如 "http://192.168.31.165:7890"
+web_proxy = "http://192.168.31.165:7890"
+web_max_bytes = 20000
+# 搜索后端：默认 DuckDuckGo 易被反爬拦截；建议换成 SearXNG JSON 接口：
+#   web_search_url = "https://searx.example/search?q={query}&format=json"
+web_search_url = "https://html.duckduckgo.com/html/?q={query}"
+
 # ------------------------------------------------------------
 # 日志配置
 # ------------------------------------------------------------

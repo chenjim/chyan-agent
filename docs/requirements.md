@@ -53,8 +53,28 @@ soft_limit = hard_limit * trigger_ratio                       # 压缩触发线
 - 持久化：`conversation.jsonl`（原始全量）、`memories.json`、`meta.json`（运行时快照）。
 
 ### FR-6 工具
-`read` / `write` / `search` / `grep` / `remember` / `recall` / `delete`，操作真实文件系统，
-敏感文件写入/删除受保护。
+操作真实文件系统，敏感文件（`config.toml`、`.env` 等）写入/编辑/删除受保护。
+
+| 工具 | 说明 | 默认 |
+|------|------|------|
+| `read` | 读文件；支持 `offset/limit` 读指定行范围与整文件智能截断 | 开 |
+| `write` | 整文件写入/追加 | 开 |
+| `edit` | 精确字符串替换（唯一匹配，或 `replace_all`） | 开 |
+| `list` | 列目录（名称/类型/大小，可设 depth） | 开 |
+| `search` | 按文件名 glob 查找 | 开 |
+| `grep` | 按正则搜索内容 | 开 |
+| `delete` | 删除文件或空目录 | 开 |
+| `remember` / `recall` | 长期记忆写入 / BM25 召回 | 开 |
+| `todo_write` / `todo_read` | 会话内任务清单 | 开 |
+| `bash` | 受限 shell 执行命令（危险命令拦截、超时、输出上限、目录限制） | 关（需 `bash_enabled`） |
+| `web_fetch` / `web_search` | 抓取网页 / 联网搜索 | 关（需 `web_enabled`） |
+
+`web_search` 支持 SearXNG/通用 JSON 接口（`web_search_url`，`{query}` 占位）；默认 DuckDuckGo HTML 常被反爬拦截，被拦截时返回明确错误与配置建议。
+
+**统一约束**：
+- `tool_output_max_bytes`：所有工具结果统一字节上限，超出截断为 `preview`，保护上下文。
+- `work_dir`：文件操作与命令的工作目录根，超出即拒绝；留空不限制。
+- 未启用的 `bash`/`web` 不注册 schema，不占用 fixed tokens。
 
 ### FR-7 CLI
 `/reset`、`/status`（含窗口、软/硬阈值、summary 上限、字节占用）、`/memories`、`/export`、`/help`、`/exit`。
@@ -82,6 +102,17 @@ soft_limit = hard_limit * trigger_ratio                       # 压缩触发线
 | `summary_max_ratio` | 0.15 | 自动上限占可用预算比例 |
 | `online_catalog` | false | 是否启用联网模型目录 |
 | `window_table` | `""` | 内置窗口表 JSON 路径，空=随包 `chyan_agent/model_windows.json` |
+
+## 4.1 工具配置（`[tools]`）
+
+| 配置 | 默认 | 说明 |
+|------|------|------|
+| `read_max_lines` / `read_truncate_mode` | 500 / `auto` | 整文件读取的行数与截断模式 |
+| `max_tool_iterations` | 10 | 单轮工具调用上限 |
+| `tool_output_max_bytes` | 20000 | 单个工具结果字节上限 |
+| `work_dir` | `""` | 工作目录根，空=不限制 |
+| `bash_enabled` / `bash_timeout` / `bash_workdir` / `bash_max_output_bytes` | false / 30 / `""` / 20000 | bash 工具 |
+| `web_enabled` / `web_proxy` / `web_max_bytes` / `web_search_url` | false / `""` / 20000 / DDG | 联网工具 |
 | `catalog_url` / `catalog_proxy` / `catalog_cache` / `catalog_ttl_hours` | — | 联网目录参数 |
 
 ## 5. 验收标准
