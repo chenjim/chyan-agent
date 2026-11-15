@@ -1,8 +1,18 @@
 # chyan 呈言智
 
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Status](https://img.shields.io/badge/status-0.1.0--dev-orange.svg)](#项目状态)
+
+Open-source, local-first personal AI agent workbench — Go single binary, Web/PWA first.
+
 呈言科技出品的开源、本地优先「个人 Agent 工作台」：以 Web/PWA 为主交互入口，统一承接编码、文件处理、浏览器操作与定时自动化。
 中文产品名：呈言智。
 Go 单二进制（纯 Go SQLite，无 cgo），可接 OpenAI 兼容模型，数据统一存 `~/.chyan/`，换机拷一个目录。
+
+> 状态：`0.1.0-dev` 早期预览，核心闭环已可用；接口与配置仍可能调整，见 [台账](docs/TODO.md)。
+
+<img src="docs/dogfood/a13-mobile/06-continue.png" alt="chyan 移动端工作台：会话、工具调用与上下文用量" width="360">
 
 **能力**
 - 多入口共用一套内核：Web/PWA 工作台、CLI/REPL、TUI、飞书/Telegram；前台对话与后台任务统一编排。
@@ -13,7 +23,7 @@ Go 单二进制（纯 Go SQLite，无 cgo），可接 OpenAI 兼容模型，数�
 
 ## 安装
 
-从 [Releases](../../releases) 下载对应平台产物（linux/win/darwin × amd64/arm64），或源码构建。
+发行版将随 [Releases](../../releases) 提供（linux/win/darwin × amd64/arm64）；当前可直接从源码构建。
 需要 Go 1.26+（`go.mod` 声明；本地工具链较旧时 Go 会自动下载对应版本）与 Node 22+（构建 Web 界面）：
 
 ```bash
@@ -163,6 +173,12 @@ md 文件为真相源（全局 `~/.chyan/memory/<kind>/*.md` + 项目 `<repo>/.a
 ## 权限与审批
 
 工具执行前过三态规则引擎（read 默认 allow，写类默认 ask）；ask 由审核模式裁决（ai：规则启发式先行 + LLM 兜底，拿不准升级人工；human：1 分钟超时降级 ai）。审批单带改动 diff，可在 PWA/TUI/CLI 明智裁决。每次操作落 audit 表可查。
+
+## 项目状态
+
+`0.1.0-dev`：对话、后台任务、审批、扩展（agents/commands/skills/MCP）、记忆、cron、多入口
+（Web/PWA、CLI、TUI、飞书/Telegram）已跑通；接口、配置与数据结构仍可能调整。
+问题与建议请开 issue，漏洞请走私密渠道（见「安全」）。
 
 ## 开发与测试
 
